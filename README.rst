@@ -1,7 +1,7 @@
 Welcome to mzpy!
 =====================
 
-MyPackage is a package for LC-MS data.
+mzpy is a package for LC-MS data.
 
 depandence
 --------
