@@ -1,0 +1,6 @@
+README.rst
+setup.py
+mzpy.egg-info/PKG-INFO
+mzpy.egg-info/SOURCES.txt
+mzpy.egg-info/dependency_links.txt
+mzpy.egg-info/top_level.txt
