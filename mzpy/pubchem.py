@@ -23,7 +23,7 @@ class PubChem():
              'mw'      : 'property/MolecularWeight',
              'ms'      : 'property/MonoisotopicMass'}
 
-    def search(self, by:str, key:str, to:str, first_only=True, print_url=False):
+    def search(self, by:str, key:str, to:str, first_only:bool=True, print_url:bool=False):
         '''
         - Searched according to cid, name or inchikey.
         - Others are not so good for searching'''
@@ -35,8 +35,10 @@ class PubChem():
         else:
             raise ValueError('search by must be "cid", "name" or "inchikey"!')
 
-    def http_get(self, url, first_only = True):
-        response = self.http.request("GET", url)
+    def http_get(self, url:str, first_only:bool=True):
+        if len(self.http.pools) > 10:
+            self.http.clear()
+        response = self.http.request("GET", url, timeout = 5)
         if response.status == 200:
             txt = response.data.decode().strip()
             data = txt.split('\n')
