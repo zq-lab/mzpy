@@ -519,3 +519,13 @@ class mzFrame(pd.DataFrame):
         return df.to_sql(*args, **kwargs)
     
 
+    ### plot chromatography
+    def plot(self, x = 'retentiontime', y = 'intensity',
+         legend= False, linewidth = 0.5,
+         *args, **kwargs):
+        return super().plot(x = x,
+                            y = y,
+                            legend = legend,
+                            linewidth = linewidth,
+                            *args,
+                            **kwargs)
