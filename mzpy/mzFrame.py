@@ -545,7 +545,7 @@ class mzFrame(pd.DataFrame):
         return eic[eic['intensity'] > thd_intensity * intensity_max]
 
 
-    def drop_dupicated_msms(self, similarity_cutoff = 0.85, inpalce = False):
+    def drop_dupicated_msms(self, similarity_cutoff = 0.85, inplace = False):
         for idx in self.index:
             msms = self.loc[idx, 'msms']
             sim = []
