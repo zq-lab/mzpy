@@ -529,3 +529,16 @@ class mzFrame(pd.DataFrame):
                             linewidth = linewidth,
                             *args,
                             **kwargs)
+
+
+    def eic(self, target_mz, ms1_error = 0.003, thd_intensity = 0.02):
+        '''
+        extract EIC of target mz
+        param:
+            thd_intensity, thd_intensity * intensity as the cut off for intensity'''
+        cdt1 = self['precursormz'] < (target_mz + ms1_error)
+        cdt2 = self['precursormz'] > (target_mz - ms1_error) 
+        eic  = self.loc[cdt1 & cdt2]
+        intensity_max = eic['intensity'].max()
+        return eic[eic['intensity'] > thd_intensity * intensity_max]
+
