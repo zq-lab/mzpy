@@ -21,6 +21,8 @@ from tqdm import tqdm
 from typing import List
 from zipfile import ZipFile
 
+from .mzMatch import calc_cosine_similarity
+
 
 def to_centroid(spectrum: np.ndarray,
                 window_threshold_rate: float=0.33,
@@ -542,3 +544,19 @@ class mzFrame(pd.DataFrame):
         intensity_max = eic['intensity'].max()
         return eic[eic['intensity'] > thd_intensity * intensity_max]
 
+
+    def drop_dupicated_msms(self, similarity_cutoff = 0.85, inpalce = False):
+        for idx in self.index:
+            msms = self.loc[idx, 'msms']
+            sim = []
+            for i in self.index[idx:]:
+                sim.append(calc_cosine_similarity(msms, self.loc[i, 'msms']))
+            if len(sim) > 0:        
+                self.loc[idx, 'similarity'] = max(sim)
+            else:
+                self.loc[idx, 'similarity'] = 0       
+        
+        if inplace:
+            self = self[self['similarity'] < similarity_cutoff]
+        else:
+            return self[self['similarity'] < similarity_cutoff]
