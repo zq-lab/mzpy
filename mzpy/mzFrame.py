@@ -522,7 +522,7 @@ class mzFrame(pd.DataFrame):
     
 
     ### plot chromatography
-    def plot(self, x = 'retentiontime', y = 'intensity',
+    def chrom(self, x = 'retentiontime', y = 'intensity',
          legend= False, linewidth = 0.5,
          *args, **kwargs):
         return super().plot(x = x,
