@@ -279,6 +279,7 @@ class mzFrame(pd.DataFrame):
                            mz_on='precursormz',
                            ms_on='msms',
                            tol=(0.003, 0.005),
+                           precursormz_compared=True,
                            similarity=0.99,
                            keep_first_on = None,
                            match_class='cpu'):
@@ -300,19 +301,21 @@ class mzFrame(pd.DataFrame):
         return
             a data frame after deduplicates.
         '''
-        if match_class == 'gpu':
-            from .mzMatch_cp import Match
-        else:
-            from .mzMatch import Match
-        
         if keep_first_on:
-            df = self.sort_values(by=keep_first_on)
+            df = self.sort_values(by=keep_first_on).copy().reset_index()
         else:
-            df = self
+            df = self.copy().reset_index()
+
+        if match_class == 'gpu':
+            from .mzMatch_cp import MSList_cp
+            msl = MSList_cp(df[mz_on], df[ms_on])
+        else:
+            from .mzMatch import MSList
+            msl = MSList(df[mz_on], df[ms_on])
         
-        mat = Match.create_from_df(df, mz_on=mz_on, ms_on=ms_on)
-        scores = mat.cosine_mx(tol=tol)
-        upper_triangle = np.triu(scores, k=1)
+        similarity = msl.compute_similarity_self(tol, precursormz_compared)
+        
+        upper_triangle = np.triu(similarity, k=1)
         _, cols = np.where(upper_triangle >= similarity)
 
         return df.drop(index=df.index[cols])
