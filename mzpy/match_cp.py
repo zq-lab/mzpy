@@ -1,7 +1,7 @@
 import cupy as cp
 import numpy as np
 
-from .mzMatch import MSList
+from .match import MSList
 
 
 

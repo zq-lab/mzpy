@@ -15,8 +15,8 @@ from scipy import stats
 from sklearn.impute import KNNImputer
 from statsmodels.sandbox.stats.multicomp import multipletests
 
-from .mzPandas import mzFrame
-from .mzPlot import Plot
+from .pandas import mzFrame
+from .plot import Plot
 from . import ms
 
 _id_pattern_ = {'kegg': r'(C\d{5})',

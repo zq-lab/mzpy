@@ -307,15 +307,15 @@ class mzFrame(pd.DataFrame):
             df = self.copy().reset_index()
 
         if match_class == 'gpu':
-            from .mzMatch_cp import MSList_cp
+            from .match_cp import MSList_cp
             msl = MSList_cp(df[mz_on], df[ms_on])
         else:
-            from .mzMatch import MSList
+            from .match import MSList
             msl = MSList(df[mz_on], df[ms_on])
         
-        similarity = msl.compute_similarity_self(tol, precursormz_compared)
+        score = msl.compute_similarity_self(tol, precursormz_compared)
         
-        upper_triangle = np.triu(similarity, k=1)
+        upper_triangle = np.triu(score, k=1)
         _, cols = np.where(upper_triangle >= similarity)
 
         return df.drop(index=df.index[cols])
@@ -344,7 +344,7 @@ class mzFrame(pd.DataFrame):
         returns:
             mzfram containing matched results.
         '''
-        from .precursortype import load_precursors
+        from .precursorType import load_precursors
         df = self.copy()
         df['Num Peaks'] = df['Num Peaks'].astype(int)
         df = df[df['Num Peaks'] > 0]
@@ -365,9 +365,9 @@ class mzFrame(pd.DataFrame):
             with the matrix having n rows and m columns.
         '''
         if match_class_type == 'gpu':
-            from .mzMatch_cp import Match
+            from .match_cp import Match
         else:
-            from .mzMatch import Match
+            from .match import Match
 
         mat = Match(self[mz_on], self[ms_on], que_mz, que_ms)
         score_mx = mat.cosine_mx()
