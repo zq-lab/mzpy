@@ -15,9 +15,9 @@ from scipy import stats
 from sklearn.impute import KNNImputer
 from statsmodels.sandbox.stats.multicomp import multipletests
 
-from .mzPandas import mzFrame
-from .mzPlot import Plot
-from . import ms
+from .peak import mzFrame
+from .plot import Plot
+from . import mz
 
 _id_pattern_ = {'kegg': r'(C\d{5})',
                 'hmdb': r'(HMDB\d{7})'}
@@ -516,7 +516,7 @@ def read_msd_ali(fpath:str, drop_null_ms=True):
 
     if drop_null_ms:
         df = df[df[('_', 'MS/MS spectrum')].notnull()].reset_index(drop=True)
-        df[('_', 'msms')] = df[('_', 'MS/MS spectrum')].apply(lambda x: ms.to_array(x, sep1=' ', sep2=':'))
+        df[('_', 'msms')] = df[('_', 'MS/MS spectrum')].apply(lambda x: mz.to_array(x, sep1=' ', sep2=':'))
         df.drop(columns=('_', 'MS/MS spectrum'))
 
     df = df.set_index(('_', 'Alignment ID'))

@@ -5,7 +5,7 @@ msms database or data sheet processor
 MSP:
     In every filed, it cannot contain newline character, such as "\r" or "\n".
         Or the msp text structure will be interrupted after being output.
-        Therefore, in the mzFrame.to_msp method, "\r" and "\n" were checked and deleted firstly.
+        Therefore, in the PeakFrame.to_msp method, "\r" and "\n" were checked and deleted firstly.
     FORMULA can be ''. But it can not be "nan" which can not be accpted by MS-Dial.
     MS-Dial does not accept single autom or ion, such as Na, N, S. 
         Thus items also be checked atom bumber before being exported in to_msp function.
@@ -15,23 +15,20 @@ import ast
 import numpy as np
 import pandas as pd
 import re
-from scipy import stats
-from statsmodels.stats.multitest import fdrcorrection
 from tqdm import tqdm
 
-from . import ms
+from . import mz
+from .stat import fisher, hypergeom
 
 
-### basic function for mzFrame
+### basic function for PeakFrame
 def concat(mzframe_list, msms_on='msms', ignore_index=False):
     for df in mzframe_list:
-        df[msms_on] = df[msms_on].apply(ms.to_str)
+        df[msms_on] = df[msms_on].apply(mz.to_str)
     rst = pd.concat(mzframe_list, ignore_index=ignore_index)
     rst[msms_on] = rst[msms_on].apply(ast.literal_eval)   
     
     return rst
-
-    
 
 ### operate functions for msms
 def _ex_intensity_(comment):
@@ -88,7 +85,7 @@ class Ion():
         elif str(ionmode).lower() in ('-', 'n', 'neg', 'negative'):
             self.ionmode = 'Negative'
 
-        self.msms = ms.normalize(msms)   
+        self.msms = mz.normalize(msms)   
 
     def __contains__(self, key):
         return key in self.__slots__
@@ -130,7 +127,7 @@ class Ion():
                     window_threshold_rate: float=0.33,
                     mz_slice_width: float=0.1,
                     n_peaks_threshold:int = 1):
-        return ms.centroid(self.msms,
+        return mz.centroid(self.msms,
                             window_threshold_rate,
                             mz_slice_width,
                             n_peaks_threshold)  
@@ -147,7 +144,7 @@ class Ion():
         return:
             True or False
         '''
-        return ms.match_mz(self.precursormz, mz, tol=tol, tol_rel=tol_rel, mode=mode)
+        return mz.match_mz(self.precursormz, mz, tol=tol, tol_rel=tol_rel, mode=mode)
 
     @property
     def npk(self):
@@ -171,7 +168,7 @@ class Ion():
             
  
 
-class mzFrame(pd.DataFrame):
+class PeakFrame(pd.DataFrame):
     '''
     convention column name as Presursor.__slot__
     '''
@@ -244,7 +241,7 @@ class mzFrame(pd.DataFrame):
         return ion
     
     def centroid_msms(self):
-        self['msms'] = self['msms'].apply(lambda x: ms.centroid(x))
+        self['msms'] = self['msms'].apply(lambda x: mz.centroid(x))
 
 
     ### plot chromatography
@@ -256,14 +253,56 @@ class mzFrame(pd.DataFrame):
                             legend = legend,
                             linewidth = linewidth,
                             *args,
-                            **kwargs)    
+                            **kwargs)  
+
+    def compute_msms_similarity(self, ref,
+                                mz_on = 'precursormz',
+                                msms_on = 'msms',
+                                ref_mz_on = None,
+                                ref_msms_on = None,
+                                tol = (0.003, 0.005),
+                                device = 'cpu',
+                                return_matrix = False):
+        '''
+        Calculate the MSMS similarity matrix between two peak frames (self and ref).
+
+        return:
+            similarity matrix or long table
+        '''
+        if device == 'gpu':
+            from .mscp import MSList_cp as MSL
+        else:
+            from .ms import MSList as MSL
+
+        if ref_mz_on is None:
+            ref_mz_on = mz_on
+        if ref_msms_on is None:
+            ref_msms_on = msms_on
+
+        self_msl = MSL(self[mz_on], self[msms_on])
+        ref_msl  = MSL(ref[ref_mz_on], ref[ref_msms_on])
+        
+        scores = self_msl.compute_similarity(ref_msl, tol=tol)
+        if return_matrix:
+            return scores
+        else:
+            # 获取行索引和列索引  
+            row_indices, col_indices = np.indices(scores.shape)  
+
+            # 创建一个DataFrame，使用 df1 和 df2 的索引  
+            long_table = pd.DataFrame({  
+                'index'     : self.index[row_indices.ravel()],   # df1 的行索引值(不是位置索引) 
+                'ref_index' :  ref.index[col_indices.ravel()],   # df2 的列索引值  
+                'similarity': scores.ravel()                             # 对应的值  
+            })         
+            return long_table
    
     def drop_istd(self, mz, rt, mz_window = 0.005, rt_window = 3):
         '''
         drop internal standard according to precursor mz and retentontime
 
         param:
-            self, mzFrame or pandas data frame object
+            self, PeakFrame or pandas data frame object
             mz, precursor mz
             rt, retention time (min)
         return
@@ -277,16 +316,17 @@ class mzFrame(pd.DataFrame):
     
     def drop_duplicated_ms(self, 
                            mz_on='precursormz',
-                           ms_on='msms',
+                           msms_on='msms',
                            tol=(0.003, 0.005),
+                           precursormz_compared=True,
                            similarity=0.99,
                            keep_first_on = None,
-                           match_class='cpu'):
+                           device='cpu'):
         '''
         drop duplicated msms
 
         param:
-            mz_on, ms_on:  columns names of precursor mz and MSMS spectra
+            mz_on, msms_on:  columns names of precursor mz and MSMS spectra
             tol:           tolerance for match
             smililarity:   similarity threshold for duplicates judgement. 
                             Based on the kernel density analysis of the metabolomics data from zebrafish,
@@ -295,24 +335,26 @@ class mzFrame(pd.DataFrame):
             keep_first_on: if None, retain the first one in the order of appearance.
                             if not None, sort by the column name specified in this parameter, 
                                 and then keep the first one.
-            match_class:   determine to use cpu or gpu edition for Match class
+            device:   determine to use cpu or gpu edition for Match class
 
         return
             a data frame after deduplicates.
         '''
-        if match_class == 'gpu':
-            from .mzMatch_cp import Match
-        else:
-            from .mzMatch import Match
-        
         if keep_first_on:
-            df = self.sort_values(by=keep_first_on)
+            df = self.sort_values(by=keep_first_on).copy().reset_index()
         else:
-            df = self
+            df = self.copy().reset_index()
+
+        if device == 'gpu':
+            from .mscp import MSList_cp
+            msl = MSList_cp(df[mz_on], df[msms_on])
+        else:
+            from .ms import MSList
+            msl = MSList(df[mz_on], df[msms_on])
         
-        mat = Match.create_from_df(df, mz_on=mz_on, ms_on=ms_on)
-        scores = mat.cosine_mx(tol=tol)
-        upper_triangle = np.triu(scores, k=1)
+        score = msl.compute_similarity_self(tol, precursormz_compared)
+        
+        upper_triangle = np.triu(score, k=1)
         _, cols = np.where(upper_triangle >= similarity)
 
         return df.drop(index=df.index[cols])
@@ -332,6 +374,56 @@ class mzFrame(pd.DataFrame):
         intensity_max = eic[intensity_on].max()
         return eic[eic[intensity_on] > thd_intensity * intensity_max]
     
+    def enrich(self,
+               que,                     # que, peak dataframe
+               target_on,               # column name of enrich targets
+               mz_on = 'precursormz',
+               msms_on = 'msms',
+               ref_mz_on = None,
+               ref_msms_on = None,
+               tol = (0.003, 0.005),
+               device = 'cpu',
+               similarity = 0.85,       # similarity cut off
+               test_method = 'fisher',
+               fdr = True
+
+        ): # return enrich data frame
+        '''
+        Match based on the self ions and que ions, and enrich by rows according to the matches.
+        '''
+        if test_method not in ('fisher', 'hypergeom'):
+            ValueError(f'Unknown test method {test_method}')
+
+        match_score = self.compute_msms_similarity(que,
+                                                   mz_on=mz_on,
+                                                   msms_on=msms_on,
+                                                   ref_mz_on=ref_mz_on,
+                                                   ref_msms_on=ref_msms_on,
+                                                   tol=tol,
+                                                   device=device)
+        hit_idx= match_score.loc[match_score['similarity'] > similarity, 'index'].unique()
+        hits = self.loc[hit_idx]
+        n_total = self.shape[0]
+        n_total_hit = hit_idx.shape[0]
+
+        enr = pd.DataFrame({
+            'n_feature': self[target_on].value_counts(),
+            'n_hit': hits[target_on].value_counts()
+        })
+        enr = enr[enr['n_hit'] > 0].copy()
+
+        if test_method == 'fisher':
+            enr['pval'] = fisher(enr, n_total, n_total_hit, fdr=fdr)
+        else:
+            enr['pval'] = hypergeom(enr, n_total, n_total_hit, fdr=fdr)
+        
+        enr['ratio'] = enr['n_hit'] / enr['n_feature']
+        enr['-log_p'] = -1 * np.log10(enr['pval'].values)
+        enr['score'] = enr['ratio'] * enr['-log_p'] 
+        enr = enr.sort_values(by='score', ascending=False)
+
+        return enr
+    
     def find_precursor_type(self, target_mass, ionmode):
         '''
         find out precursor type according to the target compound mass (target_mass)
@@ -341,7 +433,7 @@ class mzFrame(pd.DataFrame):
         returns:
             mzfram containing matched results.
         '''
-        from .precursortype import load_precursors
+        from .precursorType import load_precursors
         df = self.copy()
         df['Num Peaks'] = df['Num Peaks'].astype(int)
         df = df[df['Num Peaks'] > 0]
@@ -351,102 +443,16 @@ class mzFrame(pd.DataFrame):
         for idx in df.index:
             mz = df.loc[idx, 'precursormz']
             for j in pcs.index:
-                if ms.match_mz(mz, pcs.loc[j, 'mz']) == True:                    
+                if mz.match_mz(mz, pcs.loc[j, 'mz']) == True:                    
                     df.loc[idx,'precursortype'] = pcs.loc[j, 'type']
                     break
         return df[df['precursortype'] != '']
-    
-    def match(self, que_mz, que_ms, mz_on='precursormz', ms_on='msms', match_class_type='cpu'):
-        '''
-        Calculate the similarity matrix between self ion ms (n) and que ms (m), 
-            with the matrix having n rows and m columns.
-        '''
-        if match_class_type == 'gpu':
-            from .mzMatch_cp import Match
-        else:
-            from .mzMatch import Match
-
-        mat = Match(self[mz_on], self[ms_on], que_mz, que_ms)
-        score_mx = mat.cosine_mx()
-        return score_mx
-
-    def fit(self,
-            index_on,
-            que_mz,
-            que_ms,
-            mz_on='precursormz',
-            ms_on='msms',
-            score_thd=0.85,
-            stat_test='fisher',
-            match_class_type='cpu'):
-        '''
-        score can be a vector or matrix
-
-        param
-            index_on, enrich targets
-        '''
-        if index_on not in self.columns:
-            raise KeyError(f'{index_on}: unkown base column.')
-        if len(que_mz) != len(que_ms):
-            raise ValueError(f'The lengths of que_mz ({len(que_mz)}) and que_ms ({len(que_ms)})do not match.')
-        
-        score = self.match(que_mz, que_ms, mz_on=mz_on, ms_on=ms_on,
-                           match_class_type=match_class_type)
-        score = score.max(axis=1)
-               
-        hit_df = self[score > score_thd]
-        if hit_df.shape[0] == 0:
-            return
-        
-        ft = self[index_on].value_counts().to_frame(name='n_feature')
-        hit = hit_df[index_on].value_counts().to_frame(name='n_hit')
-        result_df = ft.join(hit, how='right')
-        result_df['hit_%'] = 100 * result_df['n_hit'] / result_df['n_feature']
-        result_df['hit_%'] = result_df['hit_%'].round(2)
-
-        n_total = self.shape[0]
-        n_total_hit = hit_df.shape[0]
-        num_test_ft = len(que_mz)
-        if stat_test == 'fisher':
-            '''
-            fisher table 2*2
-                当前匹配数,   当前不匹配数
-                其它匹配数，  其它不匹配数
-            ref: https://www.statology.org/fishers-exact-test/
-            '''
-            _test = result_df[['n_feature', 'n_hit']].apply(lambda row: 
-                                stats.fisher_exact([[row['n_hit'],
-                                                    row['n_feature']-row['n_hit']],
-                                                    [n_total_hit - row['n_hit'], 
-                                                    n_total - row['n_feature']]]),
-                            axis=1,
-                            result_type='expand')
-            pval = _test[1].tolist() 
-
-        elif stat_test == 'hypergeom':
-            if num_test_ft is None:
-                raise ValueError(f'num_test_ft is required: {num_test_ft}')
-            pval = result_df[['n_hit', 'n_feature']].apply(lambda row: 
-                                                stats.hypergeom.sf(row['n_hit']-1, 
-                                                                    n_total,
-                                                                    row['n_feature'],
-                                                                    num_test_ft), ## 这个二联表顺序有问题
-                                                                    # 导致pcal全部为1
-                axis=1)
-        else:
-            raise ValueError('inproper function No (func_no)')
-        
-        result_df['pval'] = pval
-        _, fdr = fdrcorrection(pval)
-        result_df['fdr'] = fdr
-        result_df['-lgFDR'] = -np.log10(fdr)
-        return result_df.sort_values(by='-lgFDR', ascending=False)
-        
+           
     def match_precursor_mz(self, mz, mz_on='precursormz', tol=0.003, tol_rel=5, mode='abs'):
         '''
         return precursor mz matched result
         '''
-        condition = self[mz_on].apply(lambda x: ms.match_mz(x, mz, tol=tol, tol_rel=tol_rel, mode=mode))
+        condition = self[mz_on].apply(lambda x: mz.match_mz(x, mz, tol=tol, tol_rel=tol_rel, mode=mode))
         return self[condition]
     
     def norm_msms(self, precursormz_on='precursormz', msms_on='msms',
@@ -467,14 +473,14 @@ class mzFrame(pd.DataFrame):
             # 舍弃没有裂解的母离子
             for idx in df.index:
                 if df.loc[idx, 'Num Peaks'] == 1:
-                    if ms.match_mz(df.loc[idx, precursormz_on], df.loc[idx, msms_on][0][0],
+                    if mz.match_mz(df.loc[idx, precursormz_on], df.loc[idx, msms_on][0][0],
                                tol=tol,
                                tol_rel=tol_rel,
                                mode=mode):
                         idx_to_drop.append(idx)                
             df = df.drop(idx_to_drop)
         
-        df[msms_on] = df[msms_on].apply(lambda msms: ms.normalize(msms))
+        df[msms_on] = df[msms_on].apply(lambda msms: mz.normalize(msms))
         return df    
    
     def round_msms(self, n = 5):
@@ -492,7 +498,7 @@ class mzFrame(pd.DataFrame):
         top_n, n top high intensity
         '''
         top_n = min(top_n, self.shape[0])
-        peaks = ms.centroid(self[[mz_on, intensity_on]].values)
+        peaks = mz.centroid(self[[mz_on, intensity_on]].values)
         peaks = sorted(peaks, key=lambda x: x[1], reverse=True)
         seletect_mz = [it[0] for it in peaks[:top_n]]
         return self[self[mz_on].isin(seletect_mz)] 
@@ -522,16 +528,16 @@ class mzFrame(pd.DataFrame):
                 f.flush()
         f.close()
 
-    def to_pickle(self, path, msms_on='msms', to_msms_str=True, *args, **kwargs):
+    def to_pickle(self, path, msms_on='msms', to_msms_str=False, *args, **kwargs):
         df = self.copy()
         if to_msms_str and (msms_on in df.columns):
-            df[msms_on] = df[msms_on].apply(ms.to_str)            
+            df[msms_on] = df[msms_on].apply(str)            
         return super().to_pickle(path, *args, **kwargs)
     
     def to_sqlite3(self, tbl_name, conn, if_exists='replace', index=False, msms_on='msms'):
         df = self.copy()
         if msms_on in df.columns:
-            df[msms_on] = df[msms_on].apply(ms.to_str) # 仅当msms是np数组时才有效
+            df[msms_on] = df[msms_on].apply(mz.to_str) # 仅当msms是np数组时才有效
         return df.to_sql(tbl_name, conn, if_exists=if_exists, index=index)
 
 
@@ -576,7 +582,7 @@ def read_mgf(fpath,
             elif line[0].isdigit():
                 mz, intensity = line.strip().split(sep_ms2)
                 item['msms'].append([float(mz), float(intensity)])
-    mgf = mzFrame(data)
+    mgf = PeakFrame(data)
     if 'CHARGE' in mgf.columns:
         mgf['CHARGE'] = mgf['CHARGE'].fillna('')
     if 'RTINSECONDS' in mgf.columns:
@@ -607,7 +613,7 @@ def read_mona_msp(fpath,
     param:
         extract_smiles, extract smiles string from comment field.
     '''
-    df = mzFrame. read_msp(fpath, sep_ms2=sep_ms2)
+    df = PeakFrame. read_msp(fpath, sep_ms2=sep_ms2)
     if extract_smiles:
         df['smiles'] = df['Comments'].str.extract('SMILES=(.*?)"')
     return df
@@ -618,19 +624,23 @@ def read_msd_ali(fname, washed=False):
     return Metab.read_msd_alignment(fname, washed=washed)
 
 
-def read_msd_msp(mzFrame, fname, **kwargs):
+def read_msd_msp(fname, rel_abd=False, **kwargs):
     '''
     read peak list (msp format) exported from MS-Dial version 5.2 or higher
     peak height and peak area are transfered into relative value to the base peak.
+    rel_abd: Whether to Use Relative Abundance
     return:
-        a mzFrame
+        a PeakFrame
     '''
     df = read_msp(fname, ** kwargs)
-    df[['pkid', 'peak_height', 'peak_area']] = df['comment'].apply(_ex_intensity_).apply(pd.Series)
-    basepk_heght = df['peak_height'].max()
-    basepk_area  = df['peak_area'].max()
-    df['peak_height'] = 100*df['peak_height']/basepk_heght
-    df['peak_area']   = 100*df['peak_area']/basepk_area
+    df[['pkid', 'peak_height', 'peak_area']] = df['COMMENT'].apply(_ex_intensity_).apply(pd.Series)
+
+    if rel_abd:
+        base_pk_heght = df['peak_height'].max()
+        base_pk_area  = df['peak_area'].max()
+        df['peak_height'] = 100*df['peak_height']/base_pk_heght
+        df['peak_area']   = 100*df['peak_area']/base_pk_area
+
     return df
 
 
@@ -638,7 +648,7 @@ def read_msp(fpath,
              sep_ms2='\t',
              rename: dict=None,
              comment=None,
-             to_float: set = {'PRECURSORMZ','RETENTIONTIME', 'INTENSITY'},
+             to_float: set = {'PRECURSORMZ','RETENTIONTIME', 'INTENSITY', 'Num Peaks'},
              encoding='utf-8'):
     # 使用 pandas 读取文本文件
     msp = pd.read_table(fpath,
@@ -669,8 +679,8 @@ def read_msp(fpath,
             txt_blocks = [block.replace(old_name, new_name) for block in txt_blocks]
 
     # 解析文本块为离子对象并创建 DataFrame
-    ions = [mzFrame._parse_msp_txt(block, sep_ms2=sep_ms2) for block in txt_blocks]
-    df = mzFrame(ions)
+    ions = [PeakFrame._parse_msp_txt(block, sep_ms2=sep_ms2) for block in txt_blocks]
+    df = PeakFrame(ions)
 
     # 将指定列转换为浮点数类型
     for col in to_float.intersection(df.columns):
@@ -681,7 +691,7 @@ def read_msp(fpath,
 
 def read_pickle(fname, msms_on='msms', force_msms=False):
     '''
-    read pickle file of mzFrame
+    read pickle file of PeakFrame
     param:
         fname, pickle file name
         msms_on, column name for MSMS
@@ -691,12 +701,12 @@ def read_pickle(fname, msms_on='msms', force_msms=False):
     由于模块名更改，在导入以前旧的模块名保存的pickle文件时，再度加载会找不到原模块名而报错。
     解决方案是加入模块别名：
     from mzpy import mzPandas as mpd
-    sys.modules['mzpy.mzFrame'] = mpd
+    sys.modules['mzpy.PeakFrame'] = mpd
     '''
     df = pd.read_pickle(fname)
     if force_msms and (msms_on in df.columns):
         df[msms_on] = df[msms_on].apply(ast.literal_eval)
-    return mzFrame(df)
+    return PeakFrame(df)
 
 
 def read_sql(sql, conn, msms_on='msms', force_msms=True):
@@ -707,4 +717,4 @@ def read_sql(sql, conn, msms_on='msms', force_msms=True):
     df = pd.read_sql(sql, conn)
     if force_msms and (msms_on in df.columns):
         df[msms_on] = df[msms_on].apply(ast.literal_eval)
-    return mzFrame(df) 
+    return PeakFrame(df) 

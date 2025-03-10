@@ -1,14 +1,15 @@
 from itertools import chain
-import seaborn as sns
+
 from matplotlib import colormaps as cm
-from matplotlib.colors import to_hex
-import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap, to_hex
 import matplotlib.patches as patches
+import matplotlib.pyplot as plt
 import numpy as np
+
 import pandas as pd
 from plotnine import *
+import seaborn as sns
 from sklearn.decomposition import PCA
-
 
 class Plot():
     def __init__(self, base_theme = None,
@@ -32,9 +33,15 @@ class Plot():
         self.fontsize = fontsize
         self.figure_size = figure_size
         self.dpi = dpi
+
+        # Nature 系列参考 https://zhuanlan.zhihu.com/p/670396774
+        self.colors = {
+            'Nature_1': ['#217185', '#D95319', '#FED976', '#77AC30'],
+            'Nature_2': ['#A5AEB7', '#925EB0', '#37E99F4', '#CC7C71', '#7AB656']
+        }
         
     
-    def bubble(self, df:pd.DataFrame,
+    def bubble(self, df,
                x:str       ='impact',
                y:str       = '_pFDR_',
                fill:str    = 'category',
@@ -242,6 +249,82 @@ class Plot():
             plot.save(save_to, transparent=True)
         return plot
 
+    def swatch_colors(self, colors):
+        # 设置色块的大小（1.5 cm）  
+        block_size_cm = 2.5
+        block_size_inch = block_size_cm / 2.54  # 转换为英寸（1 cm = 0.393701 in）  
+
+        # 创建图形和轴  
+        fig, ax = plt.subplots(figsize=(len(colors) * block_size_inch, block_size_inch))
+
+        # 在每个色块中显示颜色  
+        for i, color in enumerate(colors):  
+            ax.add_patch(plt.Rectangle((i, 0), 1, 1, color=color))  
+
+        # 设置轴的范围和标签  
+        ax.set_xlim(0, len(colors))  
+        ax.set_ylim(0, 1)  
+        ax.set_xticks([i + 0.5 for i in range(len(colors))])  # 设置 x 轴的刻度位置  
+        ax.set_xticklabels(colors)  # 设置 x 轴的标签为颜色代码  
+        ax.set_yticks([])  # 隐藏 y 轴刻度  
+
+        # 设置标题  
+        plt.title('Color Swatches')  
+        plt.show()
+
+    def swatch_self_colors(self, colors):
+        self.swatch_colors(self.colors[colors])
+
+    def tic_rt_mz(self, df,
+                  x,
+                  y,
+                  size,
+                  color=None,
+                  alpha=0.55,
+                  shape=None,
+                  palette='Nature_2_(5)'):  
+
+        # 计算 y 轴的最小值和最大值  
+        y_min = df[y].min() - 50  
+        y_max = df[y].max() + 100  
+
+        if palette in self.colors:
+            palette = self.colors[palette]
+        
+        if color and shape:
+            plot = (  
+                ggplot(df, aes(x=x, y=y, size=size, color=color, shape=shape)) +  # 点大小依据 log_pkarea, 颜色依据 ionmode   
+                geom_point(alpha=alpha)
+                ) 
+        elif color:
+            plot = (  
+                ggplot(df, aes(x=x, y=y, size=size, color=color)) +  # 点大小依据 log_pkarea, 颜色依据 ionmode   
+                geom_point(alpha=alpha)
+                )  
+        elif shape:
+            df[shape] = df[shape].astype(str)  
+            plot = (  
+                ggplot(df, aes(x=x, y=y, size=size, shape=shape)) +  # 点大小依据 log_pkarea, 颜色依据 ionmode   
+                geom_point(color=self.colors[palette][0]) +
+                scale_shape_manual(values={'False': 'o', 'True': '^'})  # 定义形状 
+                )  
+        else:
+            plot = (  
+                ggplot(df, aes(x=x, y=y, size=size)) +  # 点大小依据 log_pkarea, 颜色依据 ionmode   
+                geom_point(color=self.colors[palette][0])
+                )                                     
+
+        # 绘制散点图  
+        plot = (plot +             
+            labs(x='Retention Time (min)', y='Precursor m/z', color='Ion Mode', size='Log (peak area)') +  
+            ylim(y_min, y_max) +  # 设置纵坐标范围  
+            scale_color_manual(values=palette) +
+            theme_classic()+
+            theme(aspect_ratio=2/3)  # 设置长宽比  
+        )  
+
+        return plot  
+
 
     def volcano(self, df, x, y, fill,
                 xcut = 1, ycut = 2,
@@ -289,10 +372,6 @@ class Plot():
         return plot
 
 
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-from itertools import chain
-from matplotlib.colors import ListedColormap
 
 class Venn:
     """

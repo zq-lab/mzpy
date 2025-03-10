@@ -5,10 +5,6 @@ import pandas as pd
 from scipy import stats
 from statsmodels.stats.multitest import fdrcorrection 
 
-# from plotnine import ggplot, aes, geom_point, scale_size, theme_bw, labs, xlab, ylab
-
-
-
 
 class EnrichX(pd.DataFrame):
     '''
