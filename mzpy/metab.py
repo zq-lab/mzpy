@@ -15,7 +15,7 @@ from scipy import stats
 from sklearn.impute import KNNImputer
 from statsmodels.sandbox.stats.multicomp import multipletests
 
-from .peak import mzFrame
+from .peak import PeakFrame
 from .plot import Plot
 from . import mz
 
@@ -58,7 +58,7 @@ class Metab(pd.DataFrame):
             a data frame after deduplicates.
         '''
         # 按转为mzFrame后按msms去重复，获得去重复后的行索引
-        mdf = mzFrame(self['_'])
+        mdf = PeakFrame(self['_'])
         mdf = mdf.sort_values(by=keep_first_on, ascending=False)        
         mdf = mdf.drop_duplicated_ms(mz_on=mz_on,
                                      ms_on=ms_on,
@@ -415,11 +415,10 @@ class Metab(pd.DataFrame):
             return pval
 
     def vs(self,
-           nume,
-           deno,
+           scheme,
            fc:float=1.5,
            p:float=0.05,
-           basic_info_on=['Alignment ID', 'Average Rt(min)', 'Average Mz', 'Metabolite name',
+           basic_info_on=['Average Rt(min)', 'Average Mz', 'Metabolite name',
                           'Adduct type',  'Formula',         'Ontology',    'INCHIKEY',
                            'SMILES',      'Total score'],
            ms_on = 'msms',
@@ -446,9 +445,14 @@ class Metab(pd.DataFrame):
             - the vocano plot will be saved if set save_to
             - calculation results svaed into self data frame with scheme 'g1/g2'
         '''
+        schm = scheme.split('/')
+        if len(schm) != 2:
+            raise ValueError(f'calculation scheme must like G1/G2, not {scheme}!')
+        
+        nume, deno = schm[0], schm[1]
+
         log2FC = self.log2FC(nume=nume, deno=deno)
         fdr_p = self.ttest(nume, deno)
-
 
         if basic_info_on:
             if ms_on and (ms_on in self['_'].columns):
@@ -478,7 +482,7 @@ class Metab(pd.DataFrame):
                                title = f'{nume} / {deno}',
                                palette = palette,
                                save_to=save_fig_to)
-        return df, plot        
+        return PeakFrame(df), plot        
 
     def wash_metabolites(self, total_score=1.0, keep_first_by='INCHIKEY'):
         '''  
@@ -495,6 +499,26 @@ class Metab(pd.DataFrame):
         return df
     
 
+
+
+
+def parse_ms_data_to_array(ms_string):  
+    """  
+    将MS裂解数据字符串转换为两列的NumPy数组  
+    
+    :param ms_string: 空格分隔的 "mz:intensity" 格式字符串  
+    :return: 形状为 (n, 2) 的NumPy数组，其中第一列是m/z，第二列是强度  
+    """  
+    # 拆分字符串  
+    data_pairs = ms_string.split()  
+    
+    # 创建一个二维NumPy数组  
+    ms_array = np.array([  
+        [float(pair.split(':')[0]), float(pair.split(':')[1])]   
+        for pair in data_pairs  
+    ])  
+    
+    return ms_array  
 
     
 
@@ -516,7 +540,7 @@ def read_msd_ali(fpath:str, drop_null_ms=True):
 
     if drop_null_ms:
         df = df[df[('_', 'MS/MS spectrum')].notnull()].reset_index(drop=True)
-        df[('_', 'msms')] = df[('_', 'MS/MS spectrum')].apply(lambda x: mz.to_array(x, sep1=' ', sep2=':'))
+        df[('_', 'msms')] = df[('_', 'MS/MS spectrum')].apply(parse_ms_data_to_array)
         df.drop(columns=('_', 'MS/MS spectrum'))
 
     df = df.set_index(('_', 'Alignment ID'))
@@ -525,4 +549,36 @@ def read_msd_ali(fpath:str, drop_null_ms=True):
 
     return df
 
+
+
+def read_sample_info(file_path, comment='#', encoding='utf-8'):  
+    """  
+    读取配置文件，忽略注释行和行内注释  
+    
+    :param file_path: 配置文件路径  
+    :param comment: 注释符号，默认为 '#'  
+    :param encoding: 文件编码，默认为 'utf-8'  
+    :return: 配置文件的字典  
+    """  
+    sample_info = {}  
+    
+    with open(file_path, 'r', encoding=encoding) as file:  
+        for line in file:  
+            # 去除行首尾空白  
+            line = line.strip()  
+            
+            # 跳过空行和完全是注释的行  
+            if not line or line.startswith(comment):  
+                continue  
+            
+            # 处理行内注释  
+            if comment in line:  
+                line = line.split(comment)[0].strip()  
+            
+            # 解析配置项  
+            if '=' in line:  
+                key, value = line.split('=', 1)  
+                sample_info[key.strip()] = value.strip()  
+    
+    return sample_info 
 

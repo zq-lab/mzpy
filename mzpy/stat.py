@@ -2,7 +2,40 @@ import numpy as np
 from scipy import stats
 from statsmodels.stats.multitest import fdrcorrection 
 
-# from plotnine import ggplot, aes, geom_point, scale_size, theme_bw, labs, xlab, ylab
+def enrich_df(df, n_total_feature,  n_total_hit, fdr=True, method='hypergeom'): 
+    """  
+    对特征进行Fisher精确检验  
+    
+    参数:  
+        df: pandas DataFrame, 特征匹配结果  
+            第1列: n_feature (特征总数)  
+            第2列: n_hit (特征命中数)  
+        n_total: 总样本数  
+        n_total_hit: 总命中数  
+        fdr: 是否进行假发现率(FDR)校正  
+        method: Fisher检验的备择假设类型 ('two-sided', 'less', 'greater')  
+    
+    返回:  
+        p值数组  
+    """  
+    if method not in ('fisher', 'hypergeom'):
+        ValueError(f'Unknown test method {method}') 
+
+    enr = df.copy()    
+    if method == 'fisher':
+        enr['pval'] = fisher(enr, n_total_feature, n_total_hit, fdr=fdr)
+    else:
+        enr['pval'] = hypergeom(enr, n_total_feature, n_total_hit, fdr=fdr)
+    
+    enr['ratio'] = enr['num_hit_features'] / enr['num_features']
+    pval = enr['pval'].values.copy()
+    pval[pval == 0] = np.min(pval[pval > 0]) / 10  # 0 替换为最小值正数的1/10
+    enr['-log_p'] = -1 * np.log10(pval)
+    enr['score'] = enr['ratio'] * enr['-log_p'] 
+    enr = enr.sort_values(by='score', ascending=False)
+    return enr
+
+
 
 def fisher(df, n_total_feature,  n_total_hit, fdr=True, method='two-sided'):  
     """  
@@ -25,7 +58,14 @@ def fisher(df, n_total_feature,  n_total_hit, fdr=True, method='two-sided'):
     a = df.iloc[:, 1].values.astype(np.int64)  # 特征组命中数  
     b = (df.iloc[:, 0].values - a).astype(np.int64)  # 特征组未命中数  
     c = (n_total_hit - a).astype(np.int64)  # 总体命中数 - 特征组命中数  
-    d = (n_total_feature - df.iloc[:, 0].values).astype(np.int64)  # 总体总数 - 特征组总数   
+    d = (n_total_feature - df.iloc[:, 0].values).astype(np.int64)  # 总特征数 - 每个特征组总数   
+
+    if (b < 0).any():
+        raise ValueError('negative values found in b.')
+    if (c < 0).any():
+        raise ValueError('negative values found in c.')
+    if (d < 0).any():
+        raise ValueError('negative values found in d.')
 
     # 使用 NumPy 的 vectorize 进行矢量化计算  
     vec_fisher = np.vectorize(  

@@ -1,6 +1,7 @@
 import json
 import re
 import requests
+import urllib
 
 # 设置用户代理（User-Agent）和其他头部信息
 # 模拟浏览器访问
@@ -10,6 +11,24 @@ headers = {
     'Accept-Encoding': 'gzip, deflate, br',  
     'Connection': 'keep-alive',  
 } 
+
+
+def np_classfy(smiles):
+    smiles = urllib.parse.quote(smiles)  
+    url = f'https://npclassifier.gnps2.org/classify?smiles={smiles}'
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        info = json.loads(response.text)     
+        family     = info['class_results'][0]      if len(info['class_results']) > 0      else ''
+        superclass = info['superclass_results'][0] if len(info['superclass_results']) > 0 else ''
+        pathway    = info['pathway_results'][0]    if len(info['pathway_results']) > 0    else ''
+    elif response.status_code == 500:
+        family = superclass = pathway  = 'unknown'
+    else:
+        family = superclass = pathway  = f'connection error: {response.status_code}'
+    return {'family': family,
+            'superclass': superclass,
+            'pathway': pathway}
 
 
 class Compound:
@@ -109,18 +128,7 @@ class Compound:
     def create_from_KEGG(cls, field, key, show_url=False):
         pass
     
-    def fill_ontology(self):
-        if self.smiles is not None:
-            url_root = 'https://npclassifier.ucsd.edu/classify?smiles='
-            smiles = self.smiles.replace('%', '%25').replace('+', '%2B').replace('#', '%23').replace('/','%2F')
-            response = requests.get(url_root+smiles, headers=headers)
-            if response.status_code == 200:
-                info = json.loads(response.text)     
-                family     = info['class_results'][0]      if len(info['class_results']) > 0      else ''
-                superclass = info['superclass_results'][0] if len(info['superclass_results']) > 0 else ''
-                pathway    = info['pathway_results'][0]    if len(info['pathway_results']) > 0    else ''
-                self.ontology = f'{pathway}; {superclass}; {family}'
-            response.close()
+
  
 
 
