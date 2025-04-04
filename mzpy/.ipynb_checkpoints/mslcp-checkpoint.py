@@ -1,3 +1,16 @@
+'''
+MSList的cupy版本
+
+由于每个质谱的不定长，运行效率远不如numba
+
+特殊需求时，还不如开多线程或者多进程
+
+'''
+
+
+
+
+
 import cupy as cp
 import numpy as np
 from .msl import MSList

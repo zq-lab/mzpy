@@ -1,7 +1,9 @@
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from numba import njit
 
-@njit
+
+@njit(nogil=True)
 def _cosine_(que_sorted, ref_sorted, tol=(0.003, 0.005), precursormz_compared=True):
     """计算余弦相似度的核心逻辑。
     Assumption: que_sorted and ref_sorted's MS2 are already sorted in descending order by m/z, 
@@ -174,142 +176,61 @@ class MSList:
     def to_numpy(self):
         return np.ascontiguousarray(self.data)
     
-    def compute_similarity(self, ref_ms_list, tol=(0.003, 0.005), precursormz_compared=True):
-        '''
-        compoute cosine similarity between self list and ref_ms_list
-        ref_ms_list, an instance of MSList
-        return:
-            a matrix of cosine similarity
-        '''
+    def compute_similarity(self, ref_ms_list, tol=(0.003, 0.005), precursormz_compared=True, n_thread=1):
         if not isinstance(ref_ms_list, self.__class__):
             raise TypeError(f'ref_ms_list must be an instance of {self.__class__.__name__}')
 
-        
-        n_que = self.data.shape[0]  
-        n_ref = ref_ms_list.data.shape[0]  
-        similarity_matrix = np.full((n_que, n_ref), -1.0)  # 初始化相似度矩阵，默认值为 -1.0  
+        n_que = len(self.data)
+        n_ref = len(ref_ms_list.data)
+        similarity_matrix = np.full((n_que, n_ref), -1.0)
 
+        def process_i_chunk(i_start, i_end):
+            for i in range(i_start, i_end):
+                for j in range(n_ref):
+                    similarity_matrix[i, j] = _cosine_(
+                        self.data[i], ref_ms_list.data[j], tol, precursormz_compared
+                    )
 
-        for i in range(n_que):  
-            for j in range(n_ref):  
-                similarity_matrix[i, j] = _cosine_(self.data[i],
-                                                   ref_ms_list.data[j],
-                                                   tol,
-                                                   precursormz_compared)  
+        chunk_size = max(1, (n_que + n_thread - 1) // n_thread)
+        chunks = [(start, min(start + chunk_size, n_que)) for start in range(0, n_que, chunk_size)]
+
+        with ThreadPoolExecutor(max_workers=n_thread) as executor:
+            futures = []
+            for i_start, i_end in chunks:
+                futures.append(executor.submit(process_i_chunk, i_start, i_end))
+            for future in futures:
+                future.result()
 
         return similarity_matrix
 
-    def compute_similarity_self(self, tol=(0.003, 0.005), precursormz_compared=True):
-        '''
-        self-similarity
-        '''       
-        n = self.data.shape[0]  
-        similarity_matrix = np.full((n, n), -1.0)  # 初始化相似度矩阵，默认值为 -1.0  
-        for i in range(n):  
-            for j in range(n): 
-                if i < j: # 上三角
-                    similarity_matrix[i, j] = _cosine_(self.data[i],
-                                                       self.data[j],
-                                                       tol,
-                                                       precursormz_compared) 
-                elif i == j: #对角线
-                    similarity_matrix[i, j] = 1.0
-                elif i > j:
-                    similarity_matrix[i, j] = similarity_matrix[j, i]
-        return similarity_matrix             
+    def compute_similarity_self(self, tol=(0.003, 0.005), precursormz_compared=True, n_thread=1):
+        n = len(self.data)
+        similarity_matrix = np.full((n, n), -1.0)
+        np.fill_diagonal(similarity_matrix, 1.0) # 矩阵对角线
 
+        if n <= 1:
+            return similarity_matrix
 
+        def process_i_chunk(i_start, i_end):
+            for i in range(i_start, i_end):
+                for j in range(i + 1, n):
+                    sim = _cosine_(self.data[i], self.data[j], tol, precursormz_compared)
+                    similarity_matrix[i, j] = sim
+                    similarity_matrix[j, i] = sim
 
-class MSmx():
-    '''
-    Encapsulated MS array, 
-        - the first element fixed as the precursor's m/z and intensity (default intensity 100), 
-        - the second and subsequent elements as normalized MS2, 
-            converted to relative abundance and sorted by m/z in descending order.
-    ''' 
-    def __init__(self, precursormz, ms2, precursor_intensity=100):  
-        """  
-        初始化 MSList 实例，创建一个包含母离子和 MS2 数据的数组。  
+        total_i = n - 1
+        chunk_size = max(1, (total_i + n_thread - 1) // n_thread)
+        chunks = [(start, min(start + chunk_size, total_i)) for start in range(0, total_i, chunk_size)]
+
+        with ThreadPoolExecutor(max_workers=n_thread) as executor:
+            futures = []
+            for i_start, i_end in chunks:
+                futures.append(executor.submit(process_i_chunk, i_start, i_end))
+            for future in futures:
+                future.result()
+
+        return similarity_matrix
         
-        参数:  
-        precursor_intensity: 母离子的强度，默认为 100  
-        precursormz: 母离子的质荷比 (float)  
-        ms2: MS2 的二维数组，形状为 (N, 2)，表示 [mz, intensity]  
-        """  
-
-        # 创建包含母离子质荷比和强度的数组  
-        precursor_array = np.array([[precursormz, precursor_intensity]])  
-
-        # 将 MS2 数据转为相对丰度后按 mz 从大到小排序 
-        ms2 = np.asarray(ms2) 
-        max_intensity_ms2 = np.max(ms2[:, 1])   
-        if max_intensity_ms2 != 100:  
-            ms2[:, 1] = (ms2[:, 1] / max_intensity_ms2) * 100  # 转换为相对百分比  
-
-        sorted_ms2 = ms2[np.argsort(ms2[:, 0])[::-1]]  # 从大到小排序  
-
-        # 将母离子数组和排序后的 MS2 数据合并  
-        data = np.vstack((precursor_array, sorted_ms2))  
-        self.data = np.ascontiguousarray(data)
-
-
-    def __getitem__(self, index):  
-        """  
-        支持索引访问，返回指定索引的元素。  
-        """  
-        return self.data[index]  
-
-    def __len__(self):  
-        """  
-        返回 MSList 中元素的数量。  
-        """  
-        return len(self.data)  
-
-    def __repr__(self):  
-        """  
-        返回 MSList 的字符串表示。  
-        """  
-        return f"MSList({self.data})"
-
-    def compute_similarity(self, ms_mx, tol=(0.003, 0.005)):
-        if not isinstance(ms_mx, self.__class__):
-            raise TypeError(f'ref_ms_list must be an instance of {self.__class__.__name__}')
-        
-        if abs(self.precursormz - ms_mx.precursormz) > tol[0]:
-            return -1.0
-        return _cosine_(self.msms, ms_mx.msms, tol[1])
-
-
-    @property
-    def ms2_mz(self):
-        return self.data[1:, 0]
-
-    @property
-    def ms2_int(self):
-        self.data[1:, 1]
-
-    @property
-    def split_ms2(self):
-        self.data[1:, 0], self.data[1:, 1]
-
-    @property
-    def msms(self):
-        return self[1:]    
-    
-    @property
-    def num_ms2(self):
-        return self.data.shape[0]-1
-
-    @property
-    def precursor(self):
-        return self[0]
-
-    @property
-    def precursormz(self):
-        return self[0][0] 
-
-
-
 
 ############    preheat    ############
 
