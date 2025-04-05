@@ -1,5 +1,8 @@
+from concurrent.futures import ProcessPoolExecutor 
 import numpy as np
 from numba import njit
+import os
+
 
 @njit(nogil=True)
 def _cosine_(que_sorted, ref_sorted, tol=(0.003, 0.005), precursormz_compared=True):
@@ -102,6 +105,28 @@ def _cosine_(que_sorted, ref_sorted, tol=(0.003, 0.005), precursormz_compared=Tr
     return cos_val * peakCountPenalty  
 
 
+# 定义用于多进程处理的函数  
+def process_i_chunk_similarity(args):  
+    i_start, i_end, n_ref, query_data, ref_data, tol, precursormz_compared = args  
+    results = np.full((i_end - i_start, n_ref), -1.0)  
+    
+    for i_rel, i_abs in enumerate(range(i_start, i_end)):  
+        for j in range(n_ref):  
+            results[i_rel, j] = _cosine_(  
+                query_data[i_abs], ref_data[j], tol, precursormz_compared  
+            )  
+    return i_start, i_end, results  
+
+def process_i_chunk_self_similarity(args):  
+    i_start, i_end, n, data, tol, precursormz_compared = args  
+    results = []  
+    
+    for i in range(i_start, i_end):  
+        for j in range(i + 1, n):  
+            sim = _cosine_(data[i], data[j], tol, precursormz_compared)  
+            results.append((i, j, sim))  
+    
+    return results  
 
 
 class MSList: 
@@ -173,61 +198,142 @@ class MSList:
        
     def to_numpy(self):
         return np.ascontiguousarray(self.data)
+
+
+    def compute_similarity(self,
+                           ref_ms_list,
+                           tol=(0.003, 0.005),
+                           precursormz_compared=True,
+                           n_jobs=1):  
+        if not isinstance(ref_ms_list, self.__class__):  
+            raise TypeError(f'ref_ms_list must be an instance of {self.__class__.__name__}')  
+
+        # 默认使用CPU核心数-1作为进程数，但至少为1 
+        if n_jobs < 1:
+            n_jobs = 1
+
+        n_cpu = os.cpu_count()
+        n_jobs = min(n_jobs, n_cpu - 1) 
+        if n_jobs > 1:
+            print(f'Parallel computing on {n_jobs} CPUs. Num CPU: {n_cpu}')
+
+        n_que = len(self.data)  
+        n_ref = len(ref_ms_list.data)  
+        similarity_matrix = np.full((n_que, n_ref), -1.0)  
+
+        chunk_size = max(1, (n_que + n_jobs - 1) // n_jobs)  
+        chunks = [(start, min(start + chunk_size, n_que)) for start in range(0, n_que, chunk_size)]  
+        
+        # 准备多进程任务参数  
+        tasks = [  
+            (i_start, i_end, n_ref, self.data, ref_ms_list.data, tol, precursormz_compared)  
+            for i_start, i_end in chunks  
+        ]  
+
+        # 使用ProcessPoolExecutor执行多进程任务  
+        with ProcessPoolExecutor(max_workers=n_jobs) as executor:  
+            for i_start, i_end, result_chunk in executor.map(process_i_chunk_similarity, tasks):  
+                similarity_matrix[i_start:i_end, :] = result_chunk  
+
+        return similarity_matrix  
+
+    def compute_similarity_self(self,
+                                tol=(0.003, 0.005),
+                                precursormz_compared=True,
+                                n_jobs=1):  
+        # 默认使用CPU核心数-1作为进程数，但至少为1  
+        if n_jobs < 1:
+            n_jobs = 1
+
+        n_cpu = os.cpu_count()
+        n_jobs = min(n_jobs, n_cpu - 1) 
+        if n_jobs > 1:
+            print(f'Parallel computing on {n_jobs} CPUs. Num CPU: {n_cpu}')
+            
+        n = len(self.data)  
+        similarity_matrix = np.full((n, n), -1.0)  
+        np.fill_diagonal(similarity_matrix, 1.0) # 矩阵对角线  
+
+        if n <= 1:  
+            return similarity_matrix  
+
+        total_i = n - 1  
+        chunk_size = max(1, (total_i + n_jobs - 1) // n_jobs)  
+        chunks = [(start, min(start + chunk_size, total_i)) for start in range(0, total_i, chunk_size)]  
+        
+        # 准备多进程任务参数  
+        tasks = [  
+            (i_start, i_end, n, self.data, tol, precursormz_compared)  
+            for i_start, i_end in chunks  
+        ]  
+
+        # 使用ProcessPoolExecutor执行多进程任务  
+        with ProcessPoolExecutor(max_workers=n_jobs) as executor:  
+            all_results = []  
+            for result in executor.map(process_i_chunk_self_similarity, tasks):  
+                all_results.extend(result)  
+                
+            # 填充结果矩阵  
+            for i, j, sim in all_results:  
+                similarity_matrix[i, j] = sim  
+                similarity_matrix[j, i] = sim  # 对称填充  
+
+        return similarity_matrix  
     
-    def compute_similarity(self, ref_ms_list, tol=(0.003, 0.005), precursormz_compared=True, n_thread=1):
-        if not isinstance(ref_ms_list, self.__class__):
-            raise TypeError(f'ref_ms_list must be an instance of {self.__class__.__name__}')
+    # def compute_similarity(self, ref_ms_list, tol=(0.003, 0.005), precursormz_compared=True):
+    #     if not isinstance(ref_ms_list, self.__class__):
+    #         raise TypeError(f'ref_ms_list must be an instance of {self.__class__.__name__}')
 
-        n_que = len(self.data)
-        n_ref = len(ref_ms_list.data)
-        similarity_matrix = np.full((n_que, n_ref), -1.0)
+    #     n_que = len(self.data)
+    #     n_ref = len(ref_ms_list.data)
+    #     similarity_matrix = np.full((n_que, n_ref), -1.0)
 
-        def process_i_chunk(i_start, i_end):
-            for i in range(i_start, i_end):
-                for j in range(n_ref):
-                    similarity_matrix[i, j] = _cosine_(
-                        self.data[i], ref_ms_list.data[j], tol, precursormz_compared
-                    )
+    #     def process_i_chunk(i_start, i_end):
+    #         for i in range(i_start, i_end):
+    #             for j in range(n_ref):
+    #                 similarity_matrix[i, j] = _cosine_(
+    #                     self.data[i], ref_ms_list.data[j], tol, precursormz_compared
+    #                 )
 
-        chunk_size = max(1, (n_que + n_thread - 1) // n_thread)
-        chunks = [(start, min(start + chunk_size, n_que)) for start in range(0, n_que, chunk_size)]
+    #     chunk_size = max(1, (n_que + n_thread - 1) // n_thread)
+    #     chunks = [(start, min(start + chunk_size, n_que)) for start in range(0, n_que, chunk_size)]
 
-        with ThreadPoolExecutor(max_workers=n_thread) as executor:
-            futures = []
-            for i_start, i_end in chunks:
-                futures.append(executor.submit(process_i_chunk, i_start, i_end))
-            for future in futures:
-                future.result()
+    #     with ThreadPoolExecutor(max_workers=n_thread) as executor:
+    #         futures = []
+    #         for i_start, i_end in chunks:
+    #             futures.append(executor.submit(process_i_chunk, i_start, i_end))
+    #         for future in futures:
+    #             future.result()
 
-        return similarity_matrix
+    #     return similarity_matrix
 
-    def compute_similarity_self(self, tol=(0.003, 0.005), precursormz_compared=True, n_thread=1):
-        n = len(self.data)
-        similarity_matrix = np.full((n, n), -1.0)
-        np.fill_diagonal(similarity_matrix, 1.0) # 矩阵对角线
+    # def compute_similarity_self(self, tol=(0.003, 0.005), precursormz_compared=True, n_thread=1):
+    #     n = len(self.data)
+    #     similarity_matrix = np.full((n, n), -1.0)
+    #     np.fill_diagonal(similarity_matrix, 1.0) # 矩阵对角线
 
-        if n <= 1:
-            return similarity_matrix
+    #     if n <= 1:
+    #         return similarity_matrix
 
-        def process_i_chunk(i_start, i_end):
-            for i in range(i_start, i_end):
-                for j in range(i + 1, n):
-                    sim = _cosine_(self.data[i], self.data[j], tol, precursormz_compared)
-                    similarity_matrix[i, j] = sim
-                    similarity_matrix[j, i] = sim
+    #     def process_i_chunk(i_start, i_end):
+    #         for i in range(i_start, i_end):
+    #             for j in range(i + 1, n):
+    #                 sim = _cosine_(self.data[i], self.data[j], tol, precursormz_compared)
+    #                 similarity_matrix[i, j] = sim
+    #                 similarity_matrix[j, i] = sim
 
-        total_i = n - 1
-        chunk_size = max(1, (total_i + n_thread - 1) // n_thread)
-        chunks = [(start, min(start + chunk_size, total_i)) for start in range(0, total_i, chunk_size)]
+    #     total_i = n - 1
+    #     chunk_size = max(1, (total_i + n_thread - 1) // n_thread)
+    #     chunks = [(start, min(start + chunk_size, total_i)) for start in range(0, total_i, chunk_size)]
 
-        with ThreadPoolExecutor(max_workers=n_thread) as executor:
-            futures = []
-            for i_start, i_end in chunks:
-                futures.append(executor.submit(process_i_chunk, i_start, i_end))
-            for future in futures:
-                future.result()
+    #     with ThreadPoolExecutor(max_workers=n_thread) as executor:
+    #         futures = []
+    #         for i_start, i_end in chunks:
+    #             futures.append(executor.submit(process_i_chunk, i_start, i_end))
+    #         for future in futures:
+    #             future.result()
 
-        return similarity_matrix
+    #     return similarity_matrix
         
 
 ############    preheat    ############

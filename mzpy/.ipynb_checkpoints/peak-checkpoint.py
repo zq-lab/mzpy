@@ -18,6 +18,7 @@ import re
 from tqdm import tqdm
 
 from . import mz
+from .msl import MSList as MSL
 from .stat import enrich_df
 
 
@@ -279,7 +280,7 @@ class PeakFrame(pd.DataFrame):
                            precursormz_compared=True,
                            similarity=0.99,
                            keep_first_on = None,
-                           device='cpu'):
+                           n_thread=1):
         '''
         drop duplicated msms
 
@@ -303,14 +304,9 @@ class PeakFrame(pd.DataFrame):
         else:
             df = self.copy().reset_index()
 
-        if device == 'gpu':
-            from .mscp import MSList_cp
-            msl = MSList_cp(df[mz_on], df[msms_on])
-        else:
-            from .ms import MSList
-            msl = MSList(df[mz_on], df[msms_on])
+        msl = MSL(df[mz_on], df[msms_on])
         
-        score = msl.compute_similarity_self(tol, precursormz_compared)
+        score = msl.compute_similarity_self(tol, precursormz_compared, n_thread=n_thread)
         
         upper_triangle = np.triu(score, k=1)
         _, cols = np.where(upper_triangle >= similarity)
@@ -400,18 +396,14 @@ class PeakFrame(pd.DataFrame):
               que_mz_on = None,
               que_msms_on = None,
               tol = (0.003, 0.005),
-              device = 'cpu',
+              n_jobs=1,
               return_matrix = False):
         '''
         Calculate the MSMS similarity matrix between two peak frames (self and que).
 
         return:
             similarity matrix or long table
-        '''
-        if device == 'gpu':
-            from .mslcp import MSList_cp as MSL
-        else:
-            from .msl import MSList as MSL
+        '''           
 
         if que_mz_on is None:
             que_mz_on = mz_on
@@ -430,7 +422,7 @@ class PeakFrame(pd.DataFrame):
         self_msl = MSL(self[mz_on], self[msms_on])
         que_msl  = MSL(que[que_mz_on], que[que_msms_on])
         
-        scores = self_msl.compute_similarity(que_msl, tol=tol)
+        scores = self_msl.compute_similarity(que_msl, tol=tol, n_jobs=n_jobs)
         if return_matrix:
             return scores # 此返回值中，不含有self和que的行索引
         else:
