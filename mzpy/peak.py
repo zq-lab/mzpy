@@ -18,7 +18,7 @@ import re
 from tqdm import tqdm
 
 from . import mz
-from .msl import MSList as MSL
+from . import similarity
 from .stat import enrich_df
 
 
@@ -277,10 +277,10 @@ class PeakFrame(pd.DataFrame):
                            mz_on='precursormz',
                            msms_on='msms',
                            tol=(0.003, 0.005),
-                           precursormz_compared=True,
+                           precursormz_compared=False,
                            similarity=0.99,
                            keep_first_on = None,
-                           n_thread=1):
+                           n_jobs=1):
         '''
         drop duplicated msms
 
@@ -304,9 +304,10 @@ class PeakFrame(pd.DataFrame):
         else:
             df = self.copy().reset_index()
 
-        msl = MSL(df[mz_on], df[msms_on])
+        from .msl import MSList as MSL
+        msl = MSL.create(df[mz_on], df[msms_on])
         
-        score = msl.compute_similarity_self(tol, precursormz_compared, n_thread=n_thread)
+        score = msl.compute_similarity_self(tol, precursormz_compared, n_jobs=n_jobs)
         
         upper_triangle = np.triu(score, k=1)
         _, cols = np.where(upper_triangle >= similarity)
@@ -336,12 +337,11 @@ class PeakFrame(pd.DataFrame):
                que_mz_on = None,
                que_msms_on = None,
                tol = (0.003, 0.005),
-               device = 'cpu',
+               precursormz_compared=False,
                similarity = 0.85,       # similarity cut off
                test_method = 'fisher',
-               fdr = True
-
-        ): # return enrich data frame
+               fdr = True,
+               n_jobs=1): # return enrich data frame
         '''
         Match based on the self ions and que ions,
             and enrich by rows according to the matches.
@@ -354,8 +354,9 @@ class PeakFrame(pd.DataFrame):
                                              que_mz_on=que_mz_on,
                                              que_msms_on=que_msms_on,
                                              tol=tol,
-                                             device=device,
-                                             similarity=similarity)
+                                             precursormz_compared=precursormz_compared,
+                                             similarity=similarity,
+                                             n_jobs=n_jobs)
         
         enr = enrich_df(enr,
                         self.shape[0],
@@ -390,16 +391,16 @@ class PeakFrame(pd.DataFrame):
         return df[df['precursortype'] != '']
     
     def match(self,
-              que,
+              que=None,
               mz_on = 'precursormz',
               msms_on = 'msms',
               que_mz_on = None,
               que_msms_on = None,
-              tol = (0.003, 0.005),
-              n_jobs=1,
-              return_matrix = False):
+              tol = (0.003, 0.005)):
         '''
         Calculate the MSMS similarity matrix between two peak frames (self and que).
+
+        if que is None, match self
 
         return:
             similarity matrix or long table
@@ -414,29 +415,98 @@ class PeakFrame(pd.DataFrame):
             raise ValueError(f'not found the column name {mz_on}')
         if msms_on not in self.columns:
             raise ValueError(f'not found the columns name {msms_on}')
-        if que_mz_on not in que.columns:
+        if que is not None and (que_mz_on not in que.columns):
             raise ValueError(f'not found the columns name {que_mz_on}')
-        if que_msms_on not in que.columns:
+        if que is not None and (que_msms_on not in que.columns):
             raise ValueError(f'not found the columns name {que_msms_on}')
-
-        self_msl = MSL(self[mz_on], self[msms_on])
-        que_msl  = MSL(que[que_mz_on], que[que_msms_on])
         
-        scores = self_msl.compute_similarity(que_msl, tol=tol, n_jobs=n_jobs)
-        if return_matrix:
-            return scores # 此返回值中，不含有self和que的行索引
+
+        
+        self_msl = similarity.prepare_ms_list(self[mz_on].values, self[msms_on].values)
+        if que is not None:
+            que_msl = similarity.prepare_ms_list(que[que_mz_on].values, que[que_msms_on].values)
         else:
-            # 获取行索引和列索引  
-            row_indices, col_indices = np.indices(scores.shape)  
+            que_msl = None
+            
+        similarity.warmup(self_msl[0:2], self_msl[1:3]) 
+        matched_counts, bonanza, cosine = similarity.get_scores_batch(self_msl, que_msl, tol)
 
-            # 创建一个DataFrame，使用 df1 和 df2 的索引  
-            long_table = pd.DataFrame({  
-                'index'     : self.index[row_indices.ravel()],   # df1 的行索引值(不是位置索引) 
-                'que_index' :  que.index[col_indices.ravel()],   # df2 的列索引值  
-                'similarity': scores.ravel()                             # 对应的值  
-            })         
-            return long_table
+        df_counts = pd.DataFrame(matched_counts).stack().rename_axis(['idx', 'que_idx']).reset_index(name='matched_counts')  
+        df_bonanza = pd.DataFrame(bonanza).stack().rename_axis(['idx', 'que_idx']).reset_index(name='bonanza')  
+        df_cosine = pd.DataFrame(cosine).stack().rename_axis(['idx', 'que_idx']).reset_index(name='cosine')   
+
+        # 合并所有数据框  
+        df = df_counts.merge(df_bonanza, on=['idx', 'que_idx']) \
+                      .merge(df_cosine,  on=['idx', 'que_idx']) 
         
+        ## 位置索引转换为行索引
+        df['idx'] = self.index[df['idx'].tolist()]
+        if que is None:
+            df['que_idx'] = self.index[df['que_idx'].tolist()]
+            return df[df['idx'] < df['que_idx']]
+        else:
+            df['que_idx'] = que.index[df['que_idx'].tolist()]
+            return df
+        
+    def match_huge_to_csv(self,
+                          save_to,
+                          que=None,
+                          mz_on = 'precursormz',
+                          msms_on = 'msms',
+                          que_mz_on = None,
+                          que_msms_on = None,
+                          tol = (0.003, 0.005),
+                          similarity_cutoff_to_save=0.3,
+                          chunk_size=10000):
+        '''
+        超大表格match运算
+        '''
+        with open(save_to, 'w') as csv:
+            csv.write('idx,que_idx,matched_counts,bonanza,cosine\n')
+            csv.flush()
+
+            if que is not None:
+                for i in range(0, len(self), chunk_size):
+                    chunk_self = self.iloc[start:start+chunk_size]
+                    for j in range(0, len(que), chunk_size):
+                        chunk_que = self.iloc[start:start+chunk_size]
+                        scores_df = chunk_self.match(que=chunk_que,
+                                                     mz_on = mz_on,
+                                                     msms_on = msms_on,
+                                                     que_mz_on = que_mz_on,
+                                                     que_msms_on = que_msms_on,
+                                                     tol =tol)
+                        scores_df = scores_df[scores_df['bonanza'] > similarity_cutoff_to_save]
+                        scores_df.to_csv(csv, mode='a+', index=False, header=False)
+            else:
+                chunks = []  
+                for start in range(0, len(self), 3000):  
+                    chunk = self.iloc[start:start+3000]  
+                    chunks.append(chunk) 
+   
+                for i, chunk in enumerate(chunks[:-1]):
+                    scores_df = chunk.match(mz_on = mz_on,
+                                            msms_on = msms_on,
+                                            tol =tol)
+                    scores_df = scores_df[scores_df['bonanza'] > similarity_cutoff_to_save]
+                    scores_df.to_csv(csv, mode='a+', index=False, header=False)
+
+                    for next_chunk in chunks[i+1:]:
+                        scores_df = chunk.match(que=next_chunk,
+                                                mz_on = mz_on,
+                                                msms_on = msms_on,
+                                                tol =tol)
+                        scores_df = scores_df[scores_df['bonanza'] > similarity_cutoff_to_save]
+                        scores_df.to_csv(csv, mode='a+', index=False, header=False)
+
+                scores_df = chunks[-1].match(mz_on = mz_on,
+                                             msms_on = msms_on,
+                                             tol =tol)
+                scores_df = scores_df[scores_df['bonanza'] > similarity_cutoff_to_save]
+                scores_df.to_csv(csv, mode='a+', index=False, header=False)
+
+            csv.write('# finished.')      
+     
     def match_counts(self,
                      que,                     # que, peak dataframe
                      target_on,               # column name of enrich targets
@@ -445,9 +515,10 @@ class PeakFrame(pd.DataFrame):
                      que_mz_on = None,
                      que_msms_on = None,
                      tol = (0.003, 0.005),
-                     device = 'cpu',
-                     similarity = 0.85):       # similarity cut off
+                     similarity = 0.85,
+                     similarity_type='bonanza'):       # similarity cut off
         '''
+        由于match函数更新，这个函数需要修改、测试
         计算self和que的中每对离子的相似度
 
         return 
@@ -460,11 +531,11 @@ class PeakFrame(pd.DataFrame):
                             msms_on=msms_on,
                             que_mz_on=que_mz_on,
                             que_msms_on=que_msms_on,
-                            tol=tol,
-                            device=device)
-        hit_df = scores[scores['similarity'] > similarity]
+                            tol=tol)
+        
+        hit_df = scores[scores[similarity_type] > similarity]
         # 每个target的命中数统计
-        hit = hit_df['index'].value_counts().to_frame(name='num_hit_features')
+        hit = hit_df['self_idx'].value_counts().to_frame(name='num_hit_features')
         # 每个target的features数目
         features = base.index.value_counts().to_frame(name='num_features')
         # counts汇总表
@@ -472,7 +543,7 @@ class PeakFrame(pd.DataFrame):
         counts['num_hit_features'] = counts['num_hit_features'].fillna(0).astype(int)
         
         # return counts[counts['num_hit_features'] > 0], hit_df['que_index'].nunique() 
-        return counts, hit_df['que_index'].nunique()
+        return counts, hit_df['que_idx'].nunique()
         # 求算匹配离子总数时，que的一个离子有可能匹配到self的两个离子上
         # 因此不使用 counts['num_hit_features']计算
 
@@ -482,39 +553,6 @@ class PeakFrame(pd.DataFrame):
         '''
         condition = self[mz_on].apply(lambda x: mz.match_mz(x, mz, tol=tol, tol_rel=tol_rel, mode=mode))
         return self[condition]
-    
-    def match_self(self,
-                   mz_on,
-                   msms_on,
-                   tol=(0.003, 0.005),
-                   device = 'cpu',
-                   return_matrix = False):
-        if device == 'gpu':
-            from .mslcp import MSList_cp as MSL
-        else:
-            from .msl import MSList as MSL
-
-        if mz_on not in self.columns:
-            raise ValueError(f'not found the column name {mz_on}')
-        if msms_on not in self.columns:
-            raise ValueError(f'not found the columns name {msms_on}')
-
-        self_msl = MSL(self[mz_on], self[msms_on])
-       
-        scores = self_msl.compute_similarity_self(tol=tol)
-        if return_matrix:
-            return scores # 此返回值中，不含有self和que的行索引
-        else:
-            # 获取行索引和列索引  
-            row_indices, col_indices = np.indices(scores.shape)  
-
-            # 创建一个DataFrame，使用 df1 和 df2 的索引  
-            long_table = pd.DataFrame({  
-                'index'     : self.index[row_indices.ravel()],   # df1 的行索引值(不是位置索引) 
-                'que_index' : self.index[col_indices.ravel()],   # df2 的列索引值  
-                'similarity': scores.ravel()                             # 对应的值  
-            })         
-            return long_table
     
     def norm_msms(self, precursormz_on='precursormz', msms_on='msms',
                   Drop_unbroken_precursor=False,

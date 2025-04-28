@@ -1,352 +1,404 @@
-from concurrent.futures import ProcessPoolExecutor 
-import numpy as np
-from numba import njit
-import os
+# '''
+# similarity中函数的并行加速版本
+#     prepare_data 用于准备数据
+#     函数名与ms包中保持一致
+# '''
+# from . import ms
+# from . import similarity as sim
+# from numba import njit, prange
+# import numpy as np
 
 
-@njit(nogil=True)
-def _cosine_(que_sorted, ref_sorted, tol=(0.003, 0.005), precursormz_compared=True):
-    """计算余弦相似度的核心逻辑。
-    Assumption: que_sorted and ref_sorted's MS2 are already sorted in descending order by m/z, 
-                and relative abundance has been applied.  
+
+
+
+# @njit
+# def is_right_shape(que_list):
+#     return que_list.ndim == 3 and que_list.shape[2] == 2 and \
+#         que_list.shape[0] > 0 and que_list.shape[1] > 0  
+
+
+# sim_get_scores = njit(sim.get_scores)
+
+# @njit(parallel=True)  
+# def get_scores(que_list, ref_list=None, tol=(0.003, 0.005), tol_type='Da'):
+#     que_list = np.ascontiguousarray(que_list)
+#     if ref_list is not None:
+#         ref_list = np.ascontiguousarray(ref_list)
+
+#     if not is_right_shape(que_list):
+#         raise ValueError(f'Incompatible array shapes: {que_list.shape()}')
+#     if ref_list is not None and not is_right_shape(ref_list):
+#         raise ValueError(f'Incompatible array shapes: {ref_list.shape()}') 
+
+#     val_len = 4  # 固定返回4个值  
+
+#     x = que_list.shape[0]  
+
+#     # 简单形状验证（Numba能支持）  
+#     if que_list.ndim != 3 or que_list.shape[2] != 2:  
+#         return np.empty((0, 2 + val_len))  
+
+#     if ref_list is None:  
+#         # 自身上三角  
+#         row_count = x * (x + 1) // 2  
+#         result = np.zeros((row_count, 2 + val_len), dtype=np.float64)  
+#         idx = 0  
+#         for i in prange(x):  
+#             for j in range(i, x):  
+#                 scores = sim_get_scores(que_list[i], que_list[j], tol)  
+#                 # 这里假设scores为4元组  
+#                 result[idx, 0] = i  
+#                 result[idx, 1] = j  
+#                 for k in range(val_len):  
+#                     result[idx, 2 + k] = scores[k]  
+#                 idx += 1  
+#         return result  
+#     else:  
+#         # 计算所有对  
+#         y = ref_list.shape[0]  
+#         if ref_list.ndim != 3 or ref_list.shape[2] != 2:  
+#             return np.empty((0, 2 + val_len))  
+#         row_count = x * y  
+#         result = np.zeros((row_count, 2 + val_len), dtype=np.float64)  
+#         idx = 0  
+#         for i in prange(x):  
+#             for j in range(y):  
+#                 scores = sim_get_scores(que_list[i], ref_list[j], tol)  
+#                 for k in range(val_len):  
+#                     result[idx, 2 + k] = scores[k]  
+#                 result[idx, 0] = i  
+#                 result[idx, 1] = j  
+#                 idx += 1  
+#         return result  
+
+
+
+
+
+
+
+# @njit(cache=True)
+# def _cosine_(que_sorted,
+#              ref_sorted,
+#              tol=(0.003, 0.005),
+#              precursormz_compared=False,
+#              penalty=True):
+#     """计算余弦相似度的核心逻辑。
+#     Assumption: que and ref's MS2 are already sorted in descending order by m/z, 
+#                 and relative abundance has been applied.  
     
-    Args:  
-        que_sorted (ndarray): mz从大到小排序后的查询数据。  
-        ref_sorted (ndarray): mz从大到小排序后的参考数据。  
-        tol (tuple): 峰匹配的公差，包含两个值。  
+#     Args:  
+#         que, MSList ndarray, shape (m, x, 2)  
+#         ref, MSList ndarray, shape (n, y, 2)  
+#         tol (tuple): 峰匹配的公差，包含两个值。  
+#         to_sort,是否先排序再对齐mz。如果不对齐，计算的相似度不对
     
-    Returns:  
-        float: 计算得到的余弦相似度或 -1.0。  
-    """  
-    # 检查 precursor mz 差值
-    if precursormz_compared:
-        mz_diff = abs(que_sorted[0, 0] - ref_sorted[0, 0])  
-        if mz_diff > tol[0]:  
-            return -1.0  
+#     Returns:  
+#         float: 计算得到的余弦相似度或 -1.0。  
+#     """  
+   
+#     # 检查 precursor mz 差值
+#     if precursormz_compared:
+#         mz_diff = abs(que_sorted[0, 0] - ref_sorted[0, 0])  
+#         if mz_diff > tol[0]:  
+#             return 0.0
 
-    # 计算 MS2 的余弦相似度  
-    n_que = que_sorted.shape[0]  
-    n_ref = ref_sorted.shape[0]  
+#     que_msms = que_sorted[1:]
+#     ref_msms = ref_sorted[1:] 
+#     que_msms = que_msms[que_msms[:, 0] != 0]
+#     ref_msms = ref_msms[que_msms[:, 0] != 0]  
 
-    union_que = np.empty(n_que + n_ref, dtype=que_sorted.dtype)  
-    union_ref = np.empty(n_que + n_ref, dtype=ref_sorted.dtype)  
+#     # MSList长度 
+#     n_que = que_msms.shape[0]  
+#     n_ref = ref_msms.shape[0]  
 
-    i = 1  # 从第二行开始  
-    j = 1  # 从第二行开始  
-    idx = 0  
+#     union_que = np.empty(n_que + n_ref, dtype=que_sorted.dtype)  
+#     union_ref = np.empty(n_que + n_ref, dtype=ref_sorted.dtype)  
 
-    while i < n_que and j < n_ref:  
-        mz_que, int_que = que_sorted[i]  
-        mz_ref, int_ref = ref_sorted[j]  
+#     i = 0  # 从第二行开始  
+#     j = 0  # 从第二行开始  
+#     idx = 0  
 
-        if abs(mz_que - mz_ref) <= tol[1]:  
-            union_que[idx] = int_que  
-            union_ref[idx] = int_ref  
-            i += 1  
-            j += 1  
-        elif mz_que > mz_ref:  
-            union_que[idx] = int_que  
-            union_ref[idx] = 0.0  
-            i += 1  
-        else:  
-            union_que[idx] = 0.0  
-            union_ref[idx] = int_ref  
-            j += 1  
-        idx += 1  
+#     while i < n_que and j < n_ref:  
+#         mz_que, int_que = que_msms[i]  
+#         mz_ref, int_ref = ref_msms[j]  
 
-    while i < n_que:  
-        union_que[idx] = que_sorted[i, 1]  
-        union_ref[idx] = 0.0  
-        i += 1  
-        idx += 1  
+#         if abs(mz_que - mz_ref) <= tol[1]:  
+#             union_que[idx] = int_que  
+#             union_ref[idx] = int_ref  
+#             i += 1  
+#             j += 1  
+#         elif mz_que > mz_ref:  
+#             union_que[idx] = int_que  
+#             union_ref[idx] = 0.0  
+#             i += 1  
+#         else:  
+#             union_que[idx] = 0.0  
+#             union_ref[idx] = int_ref  
+#             j += 1  
+#         idx += 1  
 
-    while j < n_ref:  
-        union_que[idx] = 0.0  
-        union_ref[idx] = ref_sorted[j, 1]  
-        j += 1  
-        idx += 1  
+#     while i < n_que:  
+#         union_que[idx] = que_msms[i, 1]  
+#         union_ref[idx] = 0.0  
+#         i += 1  
+#         idx += 1  
 
-    union_que = union_que[:idx]  
-    union_ref = union_ref[:idx] 
-    '''
-    union_que and union_ref are two arrays used to store the merged intensity values. 
-    Their specific meanings and roles are as follows:
+#     while j < n_ref:  
+#         union_que[idx] = 0.0  
+#         union_ref[idx] = ref_msms[j, 1]  
+#         j += 1  
+#         idx += 1  
 
-    - union_que: an array used to store the intensity values corresponding to 
-                    each matched mz in the query MS (que).
-        When a mz in `que` matches a mz in `ref`, `union_que` will store the intensity value in `que`.
+#     union_que = union_que[:idx]  
+#     union_ref = union_ref[:idx] 
+#     '''
+#     union_que and union_ref are two arrays used to store the merged intensity values. 
+#     Their specific meanings and roles are as follows:
+
+#     - union_que: an array used to store the intensity values corresponding to 
+#                     each matched mz in the query MS (que).
+#         When a mz in `que` matches a mz in `ref`, `union_que` will store the intensity value in `que`.
     
-    The purpose of `union_que` and `union_ref` is to merge the intensity information of the two spectra 
-        into a unified structure for subsequent cosine similarity calculation.
-    Handling Unmatched Peaks: By setting the unmatched intensity values to 0, 
-        it ensures that the cosine similarity calculation is not affected.
-    '''
-    norm_que = np.sqrt(np.sum(union_que * union_que))  
-    norm_ref = np.sqrt(np.sum(union_ref * union_ref))  
-    if norm_que == 0 or norm_ref == 0:  
-        return 0.0  
+#     The purpose of `union_que` and `union_ref` is to merge the intensity information of the two spectra 
+#         into a unified structure for subsequent cosine similarity calculation.
+#     Handling Unmatched Peaks: By setting the unmatched intensity values to 0, 
+#         it ensures that the cosine similarity calculation is not affected.
+#     '''
+#     norm_que = np.sqrt(np.sum(union_que * union_que))  
+#     norm_ref = np.sqrt(np.sum(union_ref * union_ref))  
+#     if norm_que == 0 or norm_ref == 0:  
+#         return 0.0  
 
-    dot_val = np.sum(union_que * union_ref)  
-    cos_val = dot_val / (norm_que * norm_ref)  
+#     dot_val = np.sum(union_que * union_ref)  
+#     cos_val = dot_val / (norm_que * norm_ref)
 
-    lSpectrumCounter = np.sum(union_ref > 10)  
+#     if penalty:
+#         lSpectrumCounter = np.sum(union_ref > 10)  
 
-    if lSpectrumCounter == 1:  
-        peakCountPenalty = 0.75  
-    elif lSpectrumCounter == 2:  
-        peakCountPenalty = 0.88  
-    elif lSpectrumCounter == 3:  
-        peakCountPenalty = 0.94  
-    elif lSpectrumCounter == 4:  
-        peakCountPenalty = 0.97  
-    else:  
-        peakCountPenalty = 1.0  
+#         if lSpectrumCounter == 1:  
+#             peakCountPenalty = 0.75  
+#         elif lSpectrumCounter == 2:  
+#             peakCountPenalty = 0.88  
+#         elif lSpectrumCounter == 3:  
+#             peakCountPenalty = 0.94  
+#         elif lSpectrumCounter == 4:  
+#             peakCountPenalty = 0.97  
+#         else:  
+#             peakCountPenalty = 1.0  
 
-    return cos_val * peakCountPenalty  
+#         return cos_val * peakCountPenalty 
+#     else:
+#         return cos_val
 
+# # @njit(cache=True, parallel=True)  
+# # def _cosine_matrix_(que_msl,
+# #                     ref_msl,
+# #                     tol=(0.003, 0.005),
+# #                     precursormz_compared=False,
+# #                     penalty=True):  
+# #     """  
+# #     计算两个修整后的MSMS数组之间的MSMS相似度矩阵。  
 
-# 定义用于多进程处理的函数  
-def process_i_chunk_similarity(args):  
-    i_start, i_end, n_ref, query_data, ref_data, tol, precursormz_compared = args  
-    results = np.full((i_end - i_start, n_ref), -1.0)  
+# #     Args:  
+# #         que_msl (ndarray): 查询的MSMS图谱数组，形状为(n, x, 2)。  
+# #         ref_msl (ndarray): 参考的MSMS图谱数组，形状为(m, y, 2)。  
+# #         tol (tuple): 峰匹配的公差，包含两个值。  
+# #         precursormz_compared (bool): 是否比较前体质荷比。  
+
+# #     Returns:  
+# #         ndarray: MSMS相似度矩阵，形状为(n, m)。  
+# #     """  
+# #     num_que = que_msl.shape[0]  
+# #     num_ref = ref_msl.shape[0]  
     
-    for i_rel, i_abs in enumerate(range(i_start, i_end)):  
-        for j in range(n_ref):  
-            results[i_rel, j] = _cosine_(  
-                query_data[i_abs], ref_data[j], tol, precursormz_compared  
-            )  
-    return i_start, i_end, results  
+# #     # 初始化相似度矩阵  
+# #     similarity_matrix = np.zeros((num_que, num_ref), dtype=np.float64)  
 
-def process_i_chunk_self_similarity(args):  
-    i_start, i_end, n, data, tol, precursormz_compared = args  
-    results = []  
+# #     for i in prange(num_que):  # 并行的触发点
+# #         que = que_msl[i]
+# #         for j in range(num_ref):                
+# #             ref = ref_msl[j]  
+# #             # 计算余弦相似度  
+# #             similarity_matrix[i, j] = _cosine_(que, ref, tol, precursormz_compared, penalty)  
+
+# #     return similarity_matrix 
+
+# # @njit(cache=True, parallel=True)  
+# # def _cosine_self_matrix_(que_msl, tol=(0.003, 0.005), precursormz_compared=False, penalty=True):  
+# #     """  
+# #     计算que_msl内部各个MSMS图谱之间的相似度矩阵。  
+
+# #     Args:  
+# #         que_msl (ndarray): 查询的MSMS图谱数组。  
+# #         tol (tuple): 峰匹配的公差。  
+# #         precursormz_compared (bool): 是否比较前体质荷比。  
+
+# #     Returns:  
+# #         ndarray: MSMS相似度矩阵，形状为(num_que, num_que)。  
+# #     """  
+# #     num_que = que_msl.shape[0]
+# #     similarity_matrix = np.zeros((num_que, num_que), dtype=np.float64)  
+
+# #     for i in prange(num_que):  
+# #         similarity_matrix[i, i] = 1.0  # 自身相似度为1.0  
+# #         que_1 = que_msl[i]  
+# #         for j in range(i + 1, num_que):              
+# #             que_2 = que_msl[j]  
+# #             similarity = _cosine_(que_1, que_2, tol, precursormz_compared, penalty)  
+# #             similarity_matrix[i, j] = similarity  
+# #             similarity_matrix[j, i] = similarity  # 复制到对称位置  
+
+# #     return similarity_matrix
+
+
+# # class MSList(np.ndarray):
+# #     def __new__(cls, ms_arr):
+# #         '''
+# #         Organize the nested MSMS spectrum array into a NumPy 3D array with shape (n, x, 2).
+# #             The x dimension is determined by the number of rows in the MSMS spectrum with the most fragment ion.
+# #             And other MS are padded with zeros to complete the data.
+# #         param:
+# #             msms_arr: a list or NumPy array, where each element is a 2D array of MSMS.
+# #                         The length of each MSMS may vary.
+# #         '''
+# #         # 填充补0，MSMS数组等长度
+# #         max_length = 0
+# #         for i, ms in enumerate(ms_arr):
+# #             if not isinstance(ms, ms.MSdata):
+# #                 ms_arr[i] = ms.asMSdata(ms)
+# #             if ms.shape[0] > max_length:
+# #                 max_length = ms.shape[0]
+
+
+        
+# #         # 创建新的 NumPy 数组，填充零
+# #         n = len(ms_arr)
+# #         adjusted_arr = np.zeros((n, max_length, 2), dtype=np.float64)
+        
+# #         # 填充数组
+# #         for i in range(n):
+# #             precursor = msms_arr[i][0]
+# #             msms = msms_arr[i][1:]
+# #             msms = sorted(msms, key=lambda x: x[0], reverse=True)
+# #             # msms_sorted =  msms[np.argsort(msms[:, 0])[::-1]]
+# #             if to_RA:
+# #                 msms = np.asarray(msms)
+# #                 msms = to_RA(msms) 
+
+# #             data = np.vstack((precursor, msms))
+# #             current_length = len(msms_arr[i])
+# #             adjusted_arr[i, :current_length] = np.asarray(data)       
+
+# #         return np.ascontiguousarray(adjusted_arr).view(cls)      
     
-    for i in range(i_start, i_end):  
-        for j in range(i + 1, n):  
-            sim = _cosine_(data[i], data[j], tol, precursormz_compared)  
-            results.append((i, j, sim))  
+# #     def __array_finalize__(self, obj):
+# #         # 这个方法处理切片等操作
+# #         if obj is None: return
     
-    return results  
-
-
-class MSList: 
-    def __init__(self, first_input, second_input=None, precursor_intensity=100):  
-        """  
-        初始化 MSList_cp 实例，支持两种初始化方式：  
-        1. 两个列表: (precursormz_list, msms_list)  
-        2. 单一列表: 包含完整谱图数据的列表，或MSList实例  
+# #     @classmethod
+# #     def create(cls, mz_list, msms_list, intensity=100):
+# #         '''
+# #         创建 MSList2 对象，每个 MSMS 谱图的头部添加母离子质荷比和丰度（默认为100）
         
-        参数:  
-        first_input: 如果提供两个参数，则为母离子的质荷比列表；  
-                    如果只提供一个参数，则为完整数据列表或MSList实例  
-        second_input: 子离子信息列表，可选  
-        precursor_intensity: 母离子的强度，默认为 100  
-        """  
-        # 检查是否传入了MSList或MSList_cp实例  
-        if second_input is None:
-            self.data = [np.ascontiguousarray(arr) for arr in first_input]  
+# #         参数:
+# #             precursor_mzs: 浮点数数组，记录母离子的质荷比
+# #             msms_list: MSMS图谱的列表，每个元素是一个二维数组
+# #         '''
+# #         # 确保两个输入参数长度相等
+# #         if (not isinstance(mz_list, (list, np.ndarray))) or \
+# #            (not isinstance(msms_list, (list, np.ndarray))):
+# #             raise TypeError(f'mz_list must be a list or numpy array.')
+# #         if len(mz_list) != len(msms_list):
+# #             raise ValueError("precursor_mzs 和 msms_list 的长度必须相等")
         
-        # 原始初始化方式：传入两个列表  
-        elif second_input is not None:  
-            if len(first_input) != len(second_input):  
-                raise ValueError("The length of precursormz_list must match the length of msms_list.")
-            else:
-                self.data = []          
-                for precursormz, msms in zip(first_input, second_input):  
-                    precursor_array = np.array([[precursormz, precursor_intensity]])         
-                    msms = np.asarray(msms)
-                    
-                    if msms.ndim !=2:
-                        raise ValueError(f'Incorrect Data Dimension of msms array: {msms.ndim}')
-                        
-                    # 将 MS2 数据转为相对丰度后按 mz 从大到小排序
-                    max_intensity_ms2 = np.max(msms[:, 1])   
-                    if max_intensity_ms2 != 100:  
-                        msms[:, 1] = (msms[:, 1] / max_intensity_ms2) * 100  # 转换为相对百分比  
+# #         ms = []
+# #         for i, mz in enumerate(mz_list):
+# #             ms.append(np.vstack(([mz, intensity], msms_list[i])))
         
-                    sorted_msms = msms[np.argsort(msms[:, 0])[::-1]]  # 从大到小排序
-        
-                    combined_array = np.vstack((precursor_array, sorted_msms))  
-                    self.data.append(combined_array)    
-        
-        else:  
-            raise TypeError("Invalid input format. Please provide either: "  
-                           "(1) precursormz_list and msms_list, "  
-                           "(2) a complete data list, or "  
-                           "(3) an MSList instance")
-            
-        # 不论data的来源如何，self.data最终都转换为numpy数组，保持后续行为的一致性
-        self.data = np.ascontiguousarray(self.data, dtype=object)  # 使用 dtype=object 以支持不同形状的数组   
+# #         return cls(ms)
+    
+# #     def to_RA(self):
+# #         '''
+# #         transfer intensity data to ralative abundance
+# #         RA: relative abundance
+# #         '''
+# #         # data = []
+# #         msms = to_RA(self[1:])
+# #         return np.vstack((self[0], msms))
 
-    def __getitem__(self, index):  
-        """  
-        支持索引访问，返回指定索引的元素。  
-        """  
-        return self.data[index]  
-
-    def __len__(self):  
-        """  
-        返回 MSList 中元素的数量。  
-        """  
-        return len(self.data)  
-
-    def __repr__(self):  
-        """  
-        返回 MSList 的字符串表示。  
-        """  
-        return f"MSList({self.data})" 
-       
-    def to_numpy(self):
-        return np.ascontiguousarray(self.data)
-
-
-    def compute_similarity(self,
-                           ref_ms_list,
-                           tol=(0.003, 0.005),
-                           precursormz_compared=True,
-                           n_jobs=1):  
-        if not isinstance(ref_ms_list, self.__class__):  
-            raise TypeError(f'ref_ms_list must be an instance of {self.__class__.__name__}')  
-
-        # 默认使用CPU核心数-1作为进程数，但至少为1 
-        if n_jobs < 1:
-            n_jobs = 1
-
-        n_cpu = os.cpu_count()
-        n_jobs = min(n_jobs, n_cpu - 1) 
-        if n_jobs > 1:
-            print(f'Parallel computing on {n_jobs} CPUs. Num CPU: {n_cpu}')
-
-        n_que = len(self.data)  
-        n_ref = len(ref_ms_list.data)  
-        similarity_matrix = np.full((n_que, n_ref), -1.0)  
-
-        chunk_size = max(1, (n_que + n_jobs - 1) // n_jobs)  
-        chunks = [(start, min(start + chunk_size, n_que)) for start in range(0, n_que, chunk_size)]  
-        
-        # 准备多进程任务参数  
-        tasks = [  
-            (i_start, i_end, n_ref, self.data, ref_ms_list.data, tol, precursormz_compared)  
-            for i_start, i_end in chunks  
-        ]  
-
-        # 使用ProcessPoolExecutor执行多进程任务  
-        with ProcessPoolExecutor(max_workers=n_jobs) as executor:  
-            for i_start, i_end, result_chunk in executor.map(process_i_chunk_similarity, tasks):  
-                similarity_matrix[i_start:i_end, :] = result_chunk  
-
-        return similarity_matrix  
-
-    def compute_similarity_self(self,
-                                tol=(0.003, 0.005),
-                                precursormz_compared=True,
-                                n_jobs=1):  
-        # 默认使用CPU核心数-1作为进程数，但至少为1  
-        if n_jobs < 1:
-            n_jobs = 1
-
-        n_cpu = os.cpu_count()
-        n_jobs = min(n_jobs, n_cpu - 1) 
-        if n_jobs > 1:
-            print(f'Parallel computing on {n_jobs} CPUs. Num CPU: {n_cpu}')
-            
-        n = len(self.data)  
-        similarity_matrix = np.full((n, n), -1.0)  
-        np.fill_diagonal(similarity_matrix, 1.0) # 矩阵对角线  
-
-        if n <= 1:  
-            return similarity_matrix  
-
-        total_i = n - 1  
-        chunk_size = max(1, (total_i + n_jobs - 1) // n_jobs)  
-        chunks = [(start, min(start + chunk_size, total_i)) for start in range(0, total_i, chunk_size)]  
-        
-        # 准备多进程任务参数  
-        tasks = [  
-            (i_start, i_end, n, self.data, tol, precursormz_compared)  
-            for i_start, i_end in chunks  
-        ]  
-
-        # 使用ProcessPoolExecutor执行多进程任务  
-        with ProcessPoolExecutor(max_workers=n_jobs) as executor:  
-            all_results = []  
-            for result in executor.map(process_i_chunk_self_similarity, tasks):  
-                all_results.extend(result)  
                 
-            # 填充结果矩阵  
-            for i, j, sim in all_results:  
-                similarity_matrix[i, j] = sim  
-                similarity_matrix[j, i] = sim  # 对称填充  
+# #     def sort_ms2(self, ascending=False):
+# #         '''
+# #         sort each MSMS according mz
+# #         '''
+# #         pass
 
-        return similarity_matrix  
+# #     def match(self,
+# #               ref_msl=None,
+# #               tol=(0.003, 0.005),
+# #               precursormz_compared=False,
+# #               penalty=True):
+# #         if ref_msl is None:
+# #             return _cosine_self_matrix_(self,
+# #                                         tol=tol,
+# #                                         precursormz_compared=precursormz_compared,
+# #                                         penalty=penalty)
+# #         else:
+# #             if not isinstance(ref_msl, self.__class__):
+# #                 raise TypeError(f'ref_msl nust be an object of {self.__class__.__name__}')
+# #             return _cosine_matrix_(self,
+# #                                 ref_msl,
+# #                                 tol=tol,
+# #                                 precursormz_compared=precursormz_compared,
+# #                                 penalty=penalty)
     
-    # def compute_similarity(self, ref_ms_list, tol=(0.003, 0.005), precursormz_compared=True):
-    #     if not isinstance(ref_ms_list, self.__class__):
-    #         raise TypeError(f'ref_ms_list must be an instance of {self.__class__.__name__}')
+# #     def warmup(self, size=10):
+# #         import time
+# #         n = min(size, self.shape[0])
+# #         if n > 0:
+# #             # 从中随机抽取2个成员  
+# #             random_indices = np.random.choice(self.shape[0], size=2, replace=False)  
+# #             random_samples = self[random_indices] 
+# #             start_time = time.time()
+# #             a = _cosine_matrix_(random_samples,
+# #                             random_samples)
+            
+# #             b = _cosine_self_matrix_(random_samples)
+# #             end_time = time.time() 
+# #             print(f'time used: {end_time - start_time} sec.')           
 
-    #     n_que = len(self.data)
-    #     n_ref = len(ref_ms_list.data)
-    #     similarity_matrix = np.full((n_que, n_ref), -1.0)
 
-    #     def process_i_chunk(i_start, i_end):
-    #         for i in range(i_start, i_end):
-    #             for j in range(n_ref):
-    #                 similarity_matrix[i, j] = _cosine_(
-    #                     self.data[i], ref_ms_list.data[j], tol, precursormz_compared
-    #                 )
+      
 
-    #     chunk_size = max(1, (n_que + n_thread - 1) // n_thread)
-    #     chunks = [(start, min(start + chunk_size, n_que)) for start in range(0, n_que, chunk_size)]
+# # ############    preheat    ############
 
-    #     with ThreadPoolExecutor(max_workers=n_thread) as executor:
-    #         futures = []
-    #         for i_start, i_end in chunks:
-    #             futures.append(executor.submit(process_i_chunk, i_start, i_end))
-    #         for future in futures:
-    #             future.result()
-
-    #     return similarity_matrix
-
-    # def compute_similarity_self(self, tol=(0.003, 0.005), precursormz_compared=True, n_thread=1):
-    #     n = len(self.data)
-    #     similarity_matrix = np.full((n, n), -1.0)
-    #     np.fill_diagonal(similarity_matrix, 1.0) # 矩阵对角线
-
-    #     if n <= 1:
-    #         return similarity_matrix
-
-    #     def process_i_chunk(i_start, i_end):
-    #         for i in range(i_start, i_end):
-    #             for j in range(i + 1, n):
-    #                 sim = _cosine_(self.data[i], self.data[j], tol, precursormz_compared)
-    #                 similarity_matrix[i, j] = sim
-    #                 similarity_matrix[j, i] = sim
-
-    #     total_i = n - 1
-    #     chunk_size = max(1, (total_i + n_thread - 1) // n_thread)
-    #     chunks = [(start, min(start + chunk_size, total_i)) for start in range(0, total_i, chunk_size)]
-
-    #     with ThreadPoolExecutor(max_workers=n_thread) as executor:
-    #         futures = []
-    #         for i_start, i_end in chunks:
-    #             futures.append(executor.submit(process_i_chunk, i_start, i_end))
-    #         for future in futures:
-    #             future.result()
-
-    #     return similarity_matrix
-        
-
-############    preheat    ############
-
-def preheat_cosine(): 
-    print('preheating _cosine_ function') 
-    # 创建一些测试数据  
-    que_sorted = np.array([[200.0, 100.0], [199.0, 80.0], [198.0, 60.0]])  # 查询数据  
-    ref_sorted = np.array([[201.0, 110.0], [200.0, 90.0], [198.5, 70.0]])  # 参考数据  
+# # def warmup_numba():
+# #     # 创建示例数据
+# #     example_que_msl = np.random.rand(2, 3, 2)  # 示例查询 MSList
+# #     example_ref_msl = np.random.rand(3, 3, 2)  # 示例参考 MSList
+# #     example_tol = (0.003, 0.005)
+# #     example_precursormz_compared = True
+# #     example_penalty = True
+# #     print('warm up numba ...', end=' ')
+# #     # 调用 _cosine_matrix_ 和 _cosine_self_matrix_ 来触发编译
+# #     import time
+# #     start_time = time.time()
+# #     _cosine_matrix_(example_que_msl,
+# #                     example_ref_msl,
+# #                     example_tol,
+# #                     example_precursormz_compared,
+# #                     example_penalty)
     
-    # 调用该函数以触发JIT编译  
-    _ = _cosine_(que_sorted, ref_sorted)  
+# #     _cosine_self_matrix_(example_que_msl,
+# #                          example_tol,
+# #                          example_precursormz_compared,
+# #                          example_penalty)
+# #     end_time = time.time()
+# #     print(f'time used: {end_time - start_time} sec.', end='\t')
+# #     print('successfully.')
 
-# 在需要进行计算之前调用预热函数  
-preheat_cosine()  
-####################################
+# # # 在程序启动时调用预热函数
+# # warmup_numba()
+# ###################################

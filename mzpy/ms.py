@@ -1,4 +1,3 @@
-import ast
 from typing import List
 import numpy as np
 
@@ -9,19 +8,18 @@ class MSdata(np.ndarray):
     - Column 1: intensity  
     """  
 
-    def __new__(cls, input_array, metadata=None, to_normalized=False):  
-        # Convert the input array to a NumPy array, then view it as MSArray 
-        #  
+    def __new__(cls, input_array, metadata=None, to_normalized=True):  
+        # Convert the input array to a NumPy array, then view it as MSdata  
         obj = np.asarray(input_array).view(cls)  
 
         # Verify the shape is (N, 2)  
         if obj.ndim != 2 or obj.shape[1] != 2:  
-            raise ValueError("MSArray must be a 2D array with shape (N, 2): [mz, intensity].")  
+            raise ValueError("MSdata must be a 2D array with shape (N, 2): [mz, intensity].")  
 
         # Attach additional metadata if provided  
         obj.metadata = metadata  
-        if to_normalized:
-            obj = obj.normalize()
+        if to_normalized:  
+            obj = obj.normalize()  # Call the normalize method  
         return obj  
 
     def __array_finalize__(self, obj):  
@@ -90,6 +88,26 @@ class MSdata(np.ndarray):
         if not result:
             result: List[List[int]] = [self[0], self[-1]]        
         return result
+    
+    def filter_out(self, threshold=1):  
+        """  
+        Filters out rows (after the first) where the intensity (second column) is less than the given threshold.  
+        Returns a new MSdata instance with filtered data, keeping the first row.  
+        """  
+        if self.shape[0] == 0:  
+            return self  # Return the empty array if there's no data  
+        
+        # Keep the first row  
+        first_row = self[:1]  
+        
+        # Create a boolean mask for rows after the first where intensity is >= threshold  
+        mask = self[1:, 1] >= threshold  
+        
+        # Filter the array using the mask and append the first row  
+        filtered_data = np.vstack((first_row, self[1:][mask])) if mask.any() else first_row  
+        
+        # Create a new MSdata object with the filtered data  
+        return MSdata(filtered_data, metadata=self.metadata) 
 
     @property  
     def mz(self):  
@@ -121,31 +139,28 @@ class MSdata(np.ndarray):
         return np.max(self.mz)
 
     def normalize(self):  
-        """  
-        Normalizes the intensity to a maximum of 100.  
-        Returns a new MSArray instance so that metadata is preserved.  
-        """  
-        # If the current object is somehow a string, parse it  
-        if isinstance(self, str):  
-            arr = np.array(ast.literal_eval(self), dtype=np.float64) 
-            
-        if arr.shape[0] == 0:  
-            # Return an empty MSArray if there's no data  
-            empty = np.empty((0,2), dtype=np.float64).view(MSArray)  
-            empty.metadata = self.metadata  
-            return empty  
+        '''
+        Normalize fragment ions to obtain relative intensity and sort them by m/z.
+        ''' 
+        # Get mother ion and fragment ions  
+        precursor = self[0]  
+        fragment_ions = self[1:]  
 
-        max_value = arr[:, 1].max()  
-        if max_value != 100 and max_value != 0:  
-            arr[:, 1] = np.around(100.0 * arr[:, 1] / max_value, decimals=2)  
+        # Find the maximum intensity of the fragment ions  
+        max_intensity = fragment_ions[:, 1].max()  
 
-        # Sort by m/z  
-        arr = arr[arr[:, 0].argsort()]  
+        # Convert to relative intensity (using maximum intensity as baseline)
+        if max_intensity != 100:  
+            fragment_ions[:, 1] = (fragment_ions[:, 1] / max_intensity) * 100  # Convert to percentage  
 
-        # Convert back to MSArray to preserve class type and attach metadata  
-        normalized_msarray = arr.view(self.__class__)  
-        normalized_msarray.metadata = self.metadata  
-        return normalized_msarray
+        # Sort the fragment ions by m/z in descending order  
+        sorted_fragment_ions = fragment_ions[np.argsort(-fragment_ions[:, 0])]  
+
+        # Concatenate the mother ion and sorted fragment ions  
+        data = np.vstack((precursor, sorted_fragment_ions)) 
+        return MSdata(data, metadata=self.metadata, to_normalized=False)  
 
     def to_str(self):
         return str(self.tolist())
+
+
