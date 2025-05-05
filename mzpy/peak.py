@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import re
 from tqdm import tqdm
+import warnings
 
 from . import mz
 from . import similarity
@@ -277,10 +278,9 @@ class PeakFrame(pd.DataFrame):
                            mz_on='precursormz',
                            msms_on='msms',
                            tol=(0.003, 0.005),
-                           precursormz_compared=False,
-                           similarity=0.99,
-                           keep_first_on = None,
-                           n_jobs=1):
+                           sim_thd=0.9,
+                           sim_type='bonanza',
+                           keep_first_on = None):
         '''
         drop duplicated msms
 
@@ -302,17 +302,14 @@ class PeakFrame(pd.DataFrame):
         if keep_first_on:
             df = self.sort_values(by=keep_first_on).copy().reset_index()
         else:
-            df = self.copy().reset_index()
+            df = self.copy()
 
-        from .msl import MSList as MSL
-        msl = MSL.create(df[mz_on], df[msms_on])
+        scores = df.match(mz_on=mz_on,
+                          msms_on=msms_on,
+                          tol=tol)
         
-        score = msl.compute_similarity_self(tol, precursormz_compared, n_jobs=n_jobs)
-        
-        upper_triangle = np.triu(score, k=1)
-        _, cols = np.where(upper_triangle >= similarity)
-
-        return df.drop(index=df.index[cols])
+        idx_to_drop = scores.loc[scores[sim_type] > sim_thd, 'que_idx'].unique().tolist()
+        return df.drop(index=idx_to_drop)
 
     def eic(self, target_mz,
             intensity_on='intensity',
@@ -337,34 +334,78 @@ class PeakFrame(pd.DataFrame):
                que_mz_on = None,
                que_msms_on = None,
                tol = (0.003, 0.005),
-               precursormz_compared=False,
-               similarity = 0.85,       # similarity cut off
+               sim_thd= 0.9,       # similarity cut off
+               sim_type='bonanza', # simlarity type: bonanza or cosine
                test_method = 'fisher',
-               fdr = True,
-               n_jobs=1): # return enrich data frame
+               fdr = True): # return enrich data frame
         '''
+        ## Be caution: this fuction need furtherly validation.
         Match based on the self ions and que ions,
             and enrich by rows according to the matches.
         '''      
-   
-        enr, n_total_hit = self.match_counts(que=que,
-                                             target_on=target_on,
-                                             mz_on=mz_on,
-                                             msms_on=msms_on,
-                                             que_mz_on=que_mz_on,
-                                             que_msms_on=que_msms_on,
-                                             tol=tol,
-                                             precursormz_compared=precursormz_compared,
-                                             similarity=similarity,
-                                             n_jobs=n_jobs)
+
+
+        if not isinstance(que, self.__class__):
+            raise TypeError(f'que is not {self.__class__.__name__} object!')
         
-        enr = enrich_df(enr,
-                        self.shape[0],
-                        n_total_hit,
+        # 按 'tcm_name' 列分组
+        grouped = self.groupby(target_on)
+        # 将每个分组转换为子表，并存储到列表中
+        dfs = [group for _, group in grouped]
+
+        # 统计匹配数
+        matches = []
+        for df in tqdm(dfs):
+            tcm = df.iloc[0][target_on]
+            scores = df.match(que, mz_on=mz_on)
+            n_match = scores.loc[scores[sim_type] > sim_thd, 'idx'].nunique()
+            matches.append({'tcm': tcm,
+                            'n_match': n_match})
+
+        matches = pd.DataFrame(matches)
+        matches = matches[matches['n_match'] > 0].sort_values(by='n_match', ascending=False)
+        matches.set_index('tcm', inplace=True)
+
+        n_feature = self[target_on].value_counts()
+        n_feature = n_feature.to_frame(name='n_feature')
+        n_totlal_features = self.shape[0]
+        counts = matches.join(n_feature, how='left')
+        n_total_matches = int(counts['n_match'].sum())
+
+        if counts.empty or counts.shape[0] == 0:
+            warnings.warn("No matches. Returned an empty data frame.", UserWarning)
+            return counts
+
+        enr = enrich_df(counts[['n_feature', 'n_match']],
+                        n_totlal_features,
+                        n_total_matches,
                         fdr=fdr,
                         method=test_method)
-        
         return enr
+
+
+
+# ##############################################################
+#         enr = self.match_counts(que=que,
+#                                 target_on=target_on,
+#                                 mz_on=mz_on,
+#                                 msms_on=msms_on,
+#                                 que_mz_on=que_mz_on,
+#                                 que_msms_on=que_msms_on,
+#                                 tol=tol,
+#                                 sim_thd=sim_thd,
+#                                 sim_type=sim_type)
+
+#         enr = enrich_df(enr,
+#                         self.shape[0],
+#                         enr['n_matched'].sum(), 
+#                             # 这个总和有可能会导致重复计算匹配
+#                             # 如果重复计算过多，可能会导致fisher或者hypergeom检验的二联表中出现负值
+#                             # 负值会导致计算统计检验过不去
+#                         fdr=fdr,
+#                         method=test_method)
+        
+#         return enr
     
     def find_precursor_type(self, target_mass, ionmode):
         '''
@@ -415,12 +456,14 @@ class PeakFrame(pd.DataFrame):
             raise ValueError(f'not found the column name {mz_on}')
         if msms_on not in self.columns:
             raise ValueError(f'not found the columns name {msms_on}')
-        if que is not None and (que_mz_on not in que.columns):
-            raise ValueError(f'not found the columns name {que_mz_on}')
-        if que is not None and (que_msms_on not in que.columns):
-            raise ValueError(f'not found the columns name {que_msms_on}')
-        
-
+        if que is not None:
+            if not isinstance(que, self.__class__):
+                raise TypeError(f'que is not {self.__class__.__name__} object')
+            else:            
+                if que_mz_on not in que.columns:
+                    raise ValueError(f'not found the columns name {que_mz_on}')
+                if que_msms_on not in que.columns:
+                    raise ValueError(f'not found the columns name {que_msms_on}')
         
         self_msl = similarity.prepare_ms_list(self[mz_on].values, self[msms_on].values)
         if que is not None:
@@ -448,7 +491,7 @@ class PeakFrame(pd.DataFrame):
             df['que_idx'] = que.index[df['que_idx'].tolist()]
             return df
         
-    def match_huge_to_csv(self,
+    def match_by_chunk_to_csv(self,
                           save_to,
                           que=None,
                           mz_on = 'precursormz',
@@ -461,6 +504,8 @@ class PeakFrame(pd.DataFrame):
         '''
         超大表格match运算
         '''
+        warnings.warn("This function has not been tested and verified.", UserWarning)
+
         with open(save_to, 'w') as csv:
             csv.write('idx,que_idx,matched_counts,bonanza,cosine\n')
             csv.flush()
@@ -509,43 +554,55 @@ class PeakFrame(pd.DataFrame):
      
     def match_counts(self,
                      que,                     # que, peak dataframe
-                     target_on,               # column name of enrich targets
+                     target_on,               # 指定计算匹配数目的目标列
                      mz_on = 'precursormz',
                      msms_on = 'msms',
                      que_mz_on = None,
                      que_msms_on = None,
                      tol = (0.003, 0.005),
-                     similarity = 0.85,
-                     similarity_type='bonanza'):       # similarity cut off
+                     sim_thd= 0.9,
+                     sim_type='bonanza'):       # similarity cut off
         '''
-        由于match函数更新，这个函数需要修改、测试
-        计算self和que的中每对离子的相似度
 
         return 
             df: 每个target的特征数和命中特征数
             int: 以及命中特征总数        
-        '''        
-        base = self.set_index(target_on, drop=True)
-        scores = base.match(que=que,
+        '''   
+
+
+
+
+
+
+
+
+
+
+
+
+
+        scores = self.match(que,
                             mz_on=mz_on,
                             msms_on=msms_on,
                             que_mz_on=que_mz_on,
                             que_msms_on=que_msms_on,
                             tol=tol)
-        
-        hit_df = scores[scores[similarity_type] > similarity]
-        # 每个target的命中数统计
-        hit = hit_df['self_idx'].value_counts().to_frame(name='num_hit_features')
-        # 每个target的features数目
-        features = base.index.value_counts().to_frame(name='num_features')
-        # counts汇总表
-        counts = features.join(hit, how='left')
-        counts['num_hit_features'] = counts['num_hit_features'].fillna(0).astype(int)
-        
-        # return counts[counts['num_hit_features'] > 0], hit_df['que_index'].nunique() 
-        return counts, hit_df['que_idx'].nunique()
-        # 求算匹配离子总数时，que的一个离子有可能匹配到self的两个离子上
-        # 因此不使用 counts['num_hit_features']计算
+
+        scores_matched = scores[scores[sim_type] > sim_thd]
+
+        n_matched = self.loc[scores_matched['idx'].tolist(), target_on].value_counts()
+        n_feature = self[target_on].value_counts()
+
+        n_matched = n_matched.to_frame(name='n_matched')
+        n_feature = n_feature.to_frame(name='n_feature')
+
+        counts = n_feature.join(n_matched, how='left')
+        counts['n_matched'] = counts['n_matched'].fillna(0).astype(int)
+
+        counts = counts[counts['n_matched'] > 0]
+
+        return counts.sort_values(by='n_matched', ascending=False)
+
 
     def match_precursor_mz(self, mz, mz_on='precursormz', tol=0.003, tol_rel=5, mode='abs'):
         '''

@@ -93,6 +93,8 @@ def get_union_peaks(que_sorted, ref_sorted, tol=(0.003, 0.005)):
     """  
     合并并匹配两条已按 m/z 降序排序的 MS2 光谱，返回 shape=(N, 2) 的强度矩阵。  
     """  
+
+    ## 如果母离子不匹配，则MSMS视为没有匹配峰
     if abs(que_sorted[0, 0] - ref_sorted[0, 0]) > tol[0]:  
         return np.empty((0, 2), dtype=que_sorted.dtype)  
 

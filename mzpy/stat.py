@@ -27,7 +27,7 @@ def enrich_df(df, n_total_feature,  n_total_hit, fdr=True, method='hypergeom'):
     else:
         enr['pval'] = hypergeom(enr, n_total_feature, n_total_hit, fdr=fdr)
     
-    enr['ratio'] = enr['num_hit_features'] / enr['num_features']
+    enr['ratio'] = enr.iloc[:, 1] / enr.iloc[:, 0]
     pval = enr['pval'].values.copy()
     pval[pval == 0] = np.min(pval[pval > 0]) / 10  # 0 替换为最小值正数的1/10
     enr['-log_p'] = -1 * np.log10(pval)
