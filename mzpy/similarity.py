@@ -152,7 +152,7 @@ def get_scores(que, ref, tol=(0.003, 0.005)):
     matched_count = np.sum(matched_mask)
 
     if matched_count == 0:
-        return 0, 0.0, 0.0
+        return 0, 0.0, 0.0, 0.0
     # 匹配峰的点积
 
     matched_product = np.where(  
@@ -163,7 +163,7 @@ def get_scores(que, ref, tol=(0.003, 0.005)):
 
     # 不匹配峰的点积
     unmatched_product = np.where(  
-                    (arr[:, 0] == 0) | (arr[:, 1] == 0), # 都非零  
+                    (arr[:, 0] == 0) | (arr[:, 1] == 0), # 都零  
                     arr[:, 0]**2 + arr[:, 1]**2, 0
                 ) 
     bonanza_denominator = matched_product_total + unmatched_product.sum()  
@@ -172,9 +172,9 @@ def get_scores(que, ref, tol=(0.003, 0.005)):
     else:  
         bonanza = matched_product_total / bonanza_denominator  
     
-    mask = (arr[:, 0] != 0) & (arr[:, 1] != 0)  
-    result1 = np.sqrt(np.sum(arr[mask, 0] ** 2)) 
-    result2 = np.sqrt(np.sum(arr[mask, 1] ** 2)) 
+ 
+    result1 = np.sqrt(np.sum(arr[matched_mask, 0] ** 2)) 
+    result2 = np.sqrt(np.sum(arr[matched_mask, 1] ** 2)) 
     
     # 归一化的余弦相似度
     denominator_cosine = result1 * result2  
@@ -183,7 +183,11 @@ def get_scores(que, ref, tol=(0.003, 0.005)):
     else:  
         cosine = matched_product_total / denominator_cosine  
 
-    return matched_count, bonanza, cosine
+    # jaccard
+    n = max(len(que), len(ref)) - 1 # k扣除母离子
+    jaccard = matched_count / n
+    # return matched peaks count, matched ratio, bonanza score and cosine score
+    return matched_count, jaccard, bonanza, cosine
 
 
 
@@ -194,6 +198,7 @@ def get_scores_batch(que_list, ref_list=None, tol=(0.003, 0.005)):
     # ref_list为空时，行列都对应que_list  
     if (ref_list is None) or (ref_list.shape[0] == 0):  
         matched_mx = np.zeros((n1, n1), dtype=np.int32)  
+        jaccard_mx = np.zeros((n1, n1), dtype=np.float32) 
         bonanza_mx = np.zeros((n1, n1), dtype=np.float32)  
         cosine_mx  = np.zeros((n1, n1), dtype=np.float32)  
 
@@ -201,32 +206,37 @@ def get_scores_batch(que_list, ref_list=None, tol=(0.003, 0.005)):
             for j in range(i, n1):  
                 if i == j:
                     matched_count =  np.sum(que_list[i][:, 0] > 0)  
+                    jaccard = 1
                     bonanza = 1.0  
                     cosine = 1.0  
                 else:  
-                    matched_count, bonanza, cosine = get_scores(que_list[i],
-                                                                que_list[j],
-                                                                tol) 
+                    matched_count, jaccard, bonanza, cosine = get_scores(que_list[i],
+                                                                         que_list[j],
+                                                                         tol) 
                      
-                matched_mx[i, j] = matched_count  
-                bonanza_mx[i, j] = bonanza  
-                cosine_mx[i, j] = cosine 
+                matched_mx[i, j] = matched_mx[j, i] = matched_count 
+                jaccard_mx[i, j] = jaccard_mx[j, i] = jaccard 
+                bonanza_mx[i, j] = bonanza_mx[j, i] = bonanza  
+                cosine_mx[i, j]  = cosine_mx[j, i]  = cosine 
 
     else:  
         n2 = ref_list.shape[0]  
         matched_mx = np.zeros((n1, n2), dtype=np.int32)  
+        jaccard_mx = np.zeros((n1, n2), dtype=np.float32) 
         bonanza_mx = np.zeros((n1, n2), dtype=np.float32)  
         cosine_mx  = np.zeros((n1, n2), dtype=np.float32)  
 
         for i in prange(n1):  
             for j in range(n2):  
-                matched_count, bonanza, cosine = get_scores(que_list[i],
+                matched_count, jaccard, bonanza, cosine = get_scores(que_list[i],
                                                             ref_list[j],
                                                             tol)  
-                matched_mx[i, j] = matched_count  
+                matched_mx[i, j] = matched_count
+                jaccard_mx[i, j] = jaccard   
                 bonanza_mx[i, j] = bonanza  
-                cosine_mx[i, j] = cosine  
-    return matched_mx, bonanza_mx, cosine_mx
+                cosine_mx[i, j] = cosine 
+
+    return matched_mx, jaccard_mx, bonanza_mx, cosine_mx
 
 
  

@@ -334,8 +334,7 @@ class PeakFrame(pd.DataFrame):
                que_mz_on = None,
                que_msms_on = None,
                tol = (0.003, 0.005),
-               sim_thd= 0.9,       # similarity cut off
-               sim_type='bonanza', # simlarity type: bonanza or cosine
+               sim_thd= [0.9, 0.9, 0.9],  # similarity cut off for jaccard, bonanza, and cosine
                test_method = 'fisher',
                fdr = True): # return enrich data frame
         '''
@@ -347,6 +346,8 @@ class PeakFrame(pd.DataFrame):
 
         if not isinstance(que, self.__class__):
             raise TypeError(f'que is not {self.__class__.__name__} object!')
+        if len(sim_thd) < 3 :
+            raise ValueError(f'length of sim_thd must be 3: {sim_thd}')
         
         # 按 'tcm_name' 列分组
         grouped = self.groupby(target_on)
@@ -355,16 +356,25 @@ class PeakFrame(pd.DataFrame):
 
         # 统计匹配数
         matches = []
+        
         for df in tqdm(dfs):
-            tcm = df.iloc[0][target_on]
-            scores = df.match(que, mz_on=mz_on)
-            n_match = scores.loc[scores[sim_type] > sim_thd, 'idx'].nunique()
-            matches.append({'tcm': tcm,
+            target = df.iloc[0][target_on]
+            scores = df.match(que,
+                              mz_on=mz_on,
+                              msms_on=msms_on,
+                              que_mz_on=que_mz_on,
+                              que_msms_on=que_msms_on,
+                              tol=tol)
+            matched_condition = (scores['jaccard'] > sim_thd[0]) & \
+                                (scores['bonanza'] > sim_thd[1]) & \
+                                (scores['cosine']  > sim_thd[2])
+            n_match = scores.loc[matched_condition, 'idx'].nunique()
+            matches.append({target_on: target,
                             'n_match': n_match})
 
         matches = pd.DataFrame(matches)
         matches = matches[matches['n_match'] > 0].sort_values(by='n_match', ascending=False)
-        matches.set_index('tcm', inplace=True)
+        matches.set_index(target_on, inplace=True)
 
         n_feature = self[target_on].value_counts()
         n_feature = n_feature.to_frame(name='n_feature')
@@ -382,30 +392,7 @@ class PeakFrame(pd.DataFrame):
                         fdr=fdr,
                         method=test_method)
         return enr
-
-
-
-# ##############################################################
-#         enr = self.match_counts(que=que,
-#                                 target_on=target_on,
-#                                 mz_on=mz_on,
-#                                 msms_on=msms_on,
-#                                 que_mz_on=que_mz_on,
-#                                 que_msms_on=que_msms_on,
-#                                 tol=tol,
-#                                 sim_thd=sim_thd,
-#                                 sim_type=sim_type)
-
-#         enr = enrich_df(enr,
-#                         self.shape[0],
-#                         enr['n_matched'].sum(), 
-#                             # 这个总和有可能会导致重复计算匹配
-#                             # 如果重复计算过多，可能会导致fisher或者hypergeom检验的二联表中出现负值
-#                             # 负值会导致计算统计检验过不去
-#                         fdr=fdr,
-#                         method=test_method)
-        
-#         return enr
+    
     
     def find_precursor_type(self, target_mass, ionmode):
         '''
@@ -472,14 +459,16 @@ class PeakFrame(pd.DataFrame):
             que_msl = None
             
         similarity.warmup(self_msl[0:2], self_msl[1:3]) 
-        matched_counts, bonanza, cosine = similarity.get_scores_batch(self_msl, que_msl, tol)
+        matched_counts, jaccard, bonanza, cosine = similarity.get_scores_batch(self_msl, que_msl, tol)
 
         df_counts = pd.DataFrame(matched_counts).stack().rename_axis(['idx', 'que_idx']).reset_index(name='matched_counts')  
+        df_jaccard= pd.DataFrame(jaccard).stack().rename_axis(['idx', 'que_idx']).reset_index(name='jaccard')
         df_bonanza = pd.DataFrame(bonanza).stack().rename_axis(['idx', 'que_idx']).reset_index(name='bonanza')  
         df_cosine = pd.DataFrame(cosine).stack().rename_axis(['idx', 'que_idx']).reset_index(name='cosine')   
 
         # 合并所有数据框  
-        df = df_counts.merge(df_bonanza, on=['idx', 'que_idx']) \
+        df = df_counts.merge(df_jaccard, on=['idx', 'que_idx'])\
+                      .merge(df_bonanza, on=['idx', 'que_idx']) \
                       .merge(df_cosine,  on=['idx', 'que_idx']) 
         
         ## 位置索引转换为行索引
