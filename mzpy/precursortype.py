@@ -1,6 +1,3 @@
-##算法太繁琐，舍弃？
-## 还是留着用于探索新型的precursor type？
-
 '''
 Function: To find appropriate MS1 peak with MSMS
 Peaklist Files: exported from MS-Dial with version 5.5 or higher
