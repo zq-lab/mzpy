@@ -132,3 +132,121 @@ class EnrichX(pd.DataFrame):
         return enr.sort_values(by='fdr', ascending=True)
 
 
+
+import requests
+import pandas as pd
+
+class RaMPAnalysis:
+    def __init__(self, base_url="https://ramp.niaid.nih.gov/api/v1"):
+        """
+        初始化RaMP API分析工具
+        
+        :param base_url: RaMP API的基础URL
+        """
+        self.base_url = base_url
+    
+    def enrich_pathway(self, ids, id_type='kegg'):
+        """
+        进行代谢通路富集分析
+        
+        :param kegg_id: KEGG代谢物ID列表
+        :return: 富集分析结果DataFrame
+        """
+        # 为每个KEGG ID添加 'kegg:' 前缀
+        prefixed_kegg_ids = [f"{id_type}:{id}" for id in ids]
+        
+        # 准备请求载荷
+        payload = {
+            "analytes": prefixed_kegg_ids
+        }
+        
+        # RaMP API的基础URL
+        base_url = "https://rampdb.nih.gov/api/pathways-from-analytes"
+        
+        try:
+            # 发送POST请求到富集分析端点
+            response = requests.post(
+                f"{base_url}/pathway/enrichment", 
+                json=payload,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            # 检查响应
+            response.raise_for_status()
+            
+            # 解析结果
+            results = response.json()
+            
+            # 转换为DataFrame
+            if results and 'pathwayEnrichment' in results:
+                df = pd.DataFrame(results['pathwayEnrichment'])
+                
+                # 添加关键统计信息列
+                df['adjusted_pvalue'] = -np.log10(df['pValue'])  # 转换p值
+                df = df.sort_values('adjusted_pvalue', ascending=False)
+                
+                # 返回处理后的结果
+                return df
+            else:
+                print("未找到富集分析结果")
+                return pd.DataFrame()
+        
+        except requests.RequestException as e:
+            print(f"API请求错误: {e}")
+            return pd.DataFrame()
+    
+    def disease_enrichment_analysis(self, metabolite_ids=None, gene_ids=None):
+        """
+        进行疾病富集分析
+        
+        :param metabolite_ids: 代谢物ID列表
+        :param gene_ids: 基因ID列表
+        :return: 疾病分析结果DataFrame
+        """
+        # 准备请求载荷
+        payload = {
+            "metaboliteIds": metabolite_ids or [],
+            "geneIds": gene_ids or []
+        }
+        
+        # 发送POST请求
+        try:
+            response = requests.post(
+                f"{self.base_url}/disease/enrichment", 
+                json=payload,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            # 检查响应
+            response.raise_for_status()
+            
+            # 解析结果
+            results = response.json()
+            
+            # 转换为DataFrame
+            if results and 'diseaseEnrichment' in results:
+                df = pd.DataFrame(results['diseaseEnrichment'])
+                
+                # 添加关键统计信息列
+                df['adjusted_pvalue'] = -np.log10(df['pValue'])  # 转换p值
+                df = df.sort_values('adjusted_pvalue', ascending=False)
+                
+                return df
+            else:
+                print("未找到疾病富集分析结果")
+                return pd.DataFrame()
+        
+        except requests.RequestException as e:
+            print(f"API请求错误: {e}")
+            return pd.DataFrame()
+    
+    def save_results(self, df, filename):
+        """
+        保存分析结果到CSV文件
+        
+        :param df: 分析结果DataFrame
+        :param filename: 保存的文件名
+        """
+        df.to_csv(filename, index=False)
+        print(f"结果已保存到 {filename}")
+

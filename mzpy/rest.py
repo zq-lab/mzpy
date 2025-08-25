@@ -1,6 +1,8 @@
 import json
+import pandas as pd
 import re
 import requests
+from tqdm import tqdm
 import urllib
 
 # 设置用户代理（User-Agent）和其他头部信息
@@ -14,6 +16,11 @@ headers = {
 
 
 def np_classfy(smiles):
+    if (smiles is None) or (smiles == '') or (not isinstance(smiles, str)):
+        return {'family': None,
+        'superclass': None,
+        'pathway': None}
+    
     smiles = urllib.parse.quote(smiles)  
     url = f'https://npclassifier.gnps2.org/classify?smiles={smiles}'
     response = requests.get(url, headers=headers)
@@ -29,6 +36,17 @@ def np_classfy(smiles):
     return {'family': family,
             'superclass': superclass,
             'pathway': pathway}
+
+
+def np_classfy_df(df, smiles_on):
+    np_class = []
+    for idx in tqdm(df.index):
+        smiles = df.loc[idx, smiles_on]
+        class_info = np_classfy(smiles)
+        class_info['smiles'] = smiles
+        np_class.append(class_info)  
+    
+    return pd.DataFrame(np_class)  
 
 
 class Compound:

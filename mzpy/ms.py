@@ -19,7 +19,7 @@ class MSdata(np.ndarray):
         # Attach additional metadata if provided  
         obj.metadata = metadata  
         if to_normalized:  
-            obj = obj.normalize()  # Call the normalize method  
+            obj.normalize(inpalce=True)  # Call the normalize method  
         return obj  
 
     def __array_finalize__(self, obj):  
@@ -108,6 +108,14 @@ class MSdata(np.ndarray):
         
         # Create a new MSdata object with the filtered data  
         return MSdata(filtered_data, metadata=self.metadata) 
+    
+
+    def get_mz(self, intensity=0):
+        if intensity == 0:
+            return self.mz
+        else:
+            return self[self[:, 1] > intensity, 0]
+        
 
     @property  
     def mz(self):  
@@ -115,6 +123,15 @@ class MSdata(np.ndarray):
         Returns the m/z column (column 0 of the array).  
         """  
         return self[:, 0]  
+    
+
+    def insert_precursormz(self, mz, intensity=0.0):
+        '''
+        insert percursor mz at head position
+        can not be inserted inpalce
+        '''
+        return np.insert(self, 0, [mz, intensity], axis=0)
+        
 
     @property  
     def intensity(self):  
@@ -138,27 +155,25 @@ class MSdata(np.ndarray):
         """  
         return np.max(self.mz)
 
-    def normalize(self):  
+    def normalize(self, inpalce=False):  
         '''
         Normalize fragment ions to obtain relative intensity and sort them by m/z.
+        In-place transformation
         ''' 
-        # Get mother ion and fragment ions  
-        precursor = self[0]  
-        fragment_ions = self[1:]  
+        if inpalce:
+            if self.shape[0] > 0:
+                max_val = self[:, 1].max()  
+                if max_val != 0:              # 避免除 0
+                    self[:, 1] /= max_val        # 归一化到 0–1，原地修改
+                    self[:, 1] *= 100            # 转成百分比，原地修改
+        else:
+            b = self.copy()
+            if b.shape[0] > 0:
+                max_val = b[:, 1].max() 
+                if max_val != 0:
+                    b[:, 1] = b[:, 1] / max_val * 100
+            return b
 
-        # Find the maximum intensity of the fragment ions  
-        max_intensity = fragment_ions[:, 1].max()  
-
-        # Convert to relative intensity (using maximum intensity as baseline)
-        if max_intensity != 100:  
-            fragment_ions[:, 1] = (fragment_ions[:, 1] / max_intensity) * 100  # Convert to percentage  
-
-        # Sort the fragment ions by m/z in descending order  
-        sorted_fragment_ions = fragment_ions[np.argsort(-fragment_ions[:, 0])]  
-
-        # Concatenate the mother ion and sorted fragment ions  
-        data = np.vstack((precursor, sorted_fragment_ions)) 
-        return MSdata(data, metadata=self.metadata, to_normalized=False)  
 
     def to_str(self):
         return str(self.tolist())

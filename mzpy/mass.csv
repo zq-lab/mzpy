@@ -1,8 +1,8 @@
-﻿#离子类型提取自MS-Dial，Mona MS等公开库，以及老版本的自建库
-#后续将继续在无法识别的precursor中继续丰富precursor type
-#判断两个加合离子峰是否相同的依据
-#       type的分子式一致和电荷一致，注意M的系数也应该一致
-#       在人工识别重复时，可先根据offset是否一致判断
+#����������ȡ��MS-Dial��Mona MS�ȹ����⣬�Լ��ϰ汾���Խ���,,,,,
+#�������������޷�ʶ���precursor�м����ḻprecursor type,,,,,
+#�ж������Ӻ����ӷ��Ƿ���ͬ������,,,,,
+#       type�ķ���ʽһ�º͵��һ�£�ע��M��ϵ��ҲӦ��һ��,,,,,
+#       ���˹�ʶ���ظ�ʱ�����ȸ���offset�Ƿ�һ���ж�,,,,,
 ionmode,type,offset,n,charge,comment
 Negative,[M-C6H3I2O]-,-344.82733,1,1,
 Negative,[M-C12H21O10]-,-325.11347,1,1,
@@ -181,7 +181,7 @@ Positive,[M-HO+K]+,21.96097,1,1,
 Positive,[M-H+Na]+,21.98194,1,1,
 Positive,[2M+Na]+,22.98977,2,1,
 Positive,[M+Na]+,22.98977,1,1,
-Positive,[M+H+Na]+,23.99759,1,1,本身是负离子
+Positive,[M+H+Na]+,23.99759,1,1,�����Ǹ�����
 Positive,[M+H+Na]2+,23.99759,1,2,
 Positive,[M+2H+Na]3+,25.00542,1,3,
 Positive,[M-HO+HCOO]+,27.99491,1,1,

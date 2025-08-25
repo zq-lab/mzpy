@@ -68,6 +68,15 @@ class Metab(pd.DataFrame):
                                      match_class=match_class)
         
         return self.loc[mdf.index]
+    
+    def drop_null_msms(self):
+        df = self.copy()    
+        df = df[df[('_', 'MS/MS spectrum')].notnull()].reset_index(drop=True)
+        df[('_', 'msms')] = df[('_', 'MS/MS spectrum')].apply(parse_ms_data_to_array)
+        df.drop(columns=('_', 'MS/MS spectrum'), inplace=True)
+
+        return df
+
 
     def extract_id(self,
                    target = 'kegg',
@@ -103,6 +112,20 @@ class Metab(pd.DataFrame):
         #确保定量子表都是numeric类型
         # df.loc[:, groups] = df.loc[:, groups].apply(pd.to_numeric, errors='coerce')
 
+        return df
+    
+    def gather_metabolites(self, total_score=1.0, keep_first_by='S/N average'):
+        '''  
+        drop off unknown ions ans drop duplicated metabolites.
+        param:
+            total_score, cutoff value for total score
+        '''
+        df = self[self[('_', 'MS/MS matched')]].copy()
+        df = df[df[('_', 'Total score')] > total_score]
+        df = df.sort_values(by=('_', keep_first_by), ascending=False)
+        df = df.drop_duplicates(subset=[('_', 'INCHIKEY')])
+        df.index = df[('_', 'Metabolite name')].str.split(';', expand=True)[0].to_list()
+        # 没有处理零值问题
         return df
     
     def get_factor(self, groups):
@@ -155,11 +178,12 @@ class Metab(pd.DataFrame):
 
     def pca(self, groups: list = None, labeled=False, palette='Set1', save_to: str = None):       
         # 如果未指定 groups，使用默认的 groups
-        if groups is None:
-            groups = self.groups
 
-        # data = self.wash_quantum()
-        data = self[groups].T.copy()
+        df = self.fill_quantum_zero()
+        if groups is None:
+            groups = df.groups
+            
+        data = df[groups].T.copy()
         
         # 对数据取对数
         data = np.log10(data)
@@ -215,7 +239,13 @@ class Metab(pd.DataFrame):
            'Matched peaks count', 'Matched peaks percentage', 'Total score']].describe()
 
 
-    def spearman(self, groups=None, corr_cut=0.7, p_cut=0.05, fdr_corr=True, save_to=None):
+    def spearman(self,
+                 key_on='Alignment ID',
+                 groups=None,
+                 corr_thd=0.8,
+                 p_thd=0.01,
+                 fdr_corr=True,
+                 save_to=None):
         '''
         param:
             groups, list, groups for Spearman's test
@@ -229,61 +259,71 @@ class Metab(pd.DataFrame):
         '''
         from scipy.stats import spearmanr
 
+        if key_on not in self["_"].columns:
+            raise KeyError(f'unknown column name: {key_on}')
+
         if groups is None:
-            groups = df.groups
-            df = self.copy()
+            groups = self.groups        
+        
         else:
-            df = self[['_'] + groups].copy()
+            gp_check = set(groups) - set(self.groups)
+            if len(gp_check) > 0:
+                raise ValueError(f'unknown group name(s): {gp_check}')
 
         corr = []
         pval = []
-        factor = df.get_factor(groups)
+        factor = self.get_factor(groups)
         # need check const values
-        for i in df.index:
-            correlation, p = spearmanr(df.loc[i, groups].values, factor)
+        for i in self.index:
+            correlation, p = spearmanr(self.loc[i, groups].values, factor)
             corr.append(float(correlation))
             pval.append(float(p))
 
         correlation = np.asarray(correlation)
-        correlation[np.isnan(correlation)] = 0
+        correlation[np.isnan(correlation)] = 0.0
         pval = np.asarray(pval)
         pval[np.isnan(pval)] = 1.0   
              
         if fdr_corr:
             pval = multipletests(pval, method='fdr_bh')[1]
         
-        df[('spearman', 'corr')] = corr
-        df[('spearman', 'pval')] = pval
-        df[('spearman', '-lg_pval')] = -np.log10(pval)
+        df = pd.DataFrame({
+            'kid': self[('_', key_on)].values,
+            'corr': corr,
+            'pval': pval,
+            '-log_pval': -np.log10(pval)
+        })
+        df = df.fillna(0)
 
         for i in df.index:
-            if (df.loc[i, ('spearman', 'corr')] >= corr_cut) and \
-            (df.loc[i, ('spearman', 'pval')] < p_cut):
-                df.loc[i, ('spearman', 'monot')] = 'up'
-            elif (df.loc[i, ('spearman', 'corr')] <= -1 * corr_cut) and \
-                 (df.loc[i, ('spearman', 'pval')] < p_cut):
-                df.loc[i, ('spearman', 'monot')] = 'dn'
-            else:
-                df.loc[i, ('spearman', 'monot')] = 'no'
+            if (df.loc[i, 'corr'] > corr_thd) and \
+               (df.loc[i, 'pval'] < p_thd):
+                df.loc[i, 'monot'] = 'up'
 
-        return df, mzplt.volcano(df['spearman'],
+            elif (df.loc[i, 'corr'] < -1 * corr_thd) and \
+                 (df.loc[i, 'pval'] < p_thd):
+                df.loc[i, 'monot'] = 'dn'
+
+            else:
+                df.loc[i, 'monot'] = 'no'
+
+        return df, mzplt.volcano(df,
                                  x = 'corr',
-                                 y = '-lg_pval',
+                                 y = '-log_pval',
                                  fill = 'monot',
                                  title = 'Spearman test',
                                  xlab = r'$r_s$',
                                  ylab = r'-$\log_{10}(\mathrm{p\text{-}value})$',
-                                 xcut = corr_cut,
-                                 ycut = -np.log10(p_cut),
+                                 xcut = corr_thd,
+                                 ycut = -np.log10(p_thd),
                                  save_to=save_to)
 
 
     def trio(self, vs1, vs2,
             pattern:str,
             fc:float=1.5, p:float=0.05,
-            key:str = None,
-            palette = 'Set1',
-            save_to = None):
+            metabo_idx:str = None,
+            palette = 'Set1'):
         '''
         obtaine differential expressed metabolites (dem) form the existing vs groups (vs1 and vs2) according to
             the specified pattern, and plot venn diagram.
@@ -304,18 +344,29 @@ class Metab(pd.DataFrame):
         if len(groups) != 3:
             raise TypeError('Only 3 groups can be accepted.')
         if not groups <= set(self.groups):
-            raise ValueError('Unknown group name. Please Check groups names in params vs1 or vs2')        
+            raise ValueError('Unknown group name. Please Check groups names in params vs1 or vs2') 
+        
+        metabo_info_on=['Average Rt(min)', 'Average Mz', 'Metabolite name',
+                'Adduct type',  'Formula',         'Ontology',    'INCHIKEY',
+                'SMILES',      'Total score']
+        
+        if metabo_idx:
+            if metabo_idx in self['_'].columns:
+                metabo_info_on.append(metabo_idx)
+
+        df1, p1 = self.vs(vs1, metabo_info_on=metabo_info_on, fc=fc, p=p) 
+        df2, p2 = self.vs(vs2, metabo_info_on=metabo_info_on, fc=fc, p=p)      
       
-        if key:
-            a = set(self.loc[self[(vs1, 'regulation')] == 'up', ('_', key)].values)
-            b = set(self.loc[self[(vs1, 'regulation')] == 'dn', ('_', key)].values)
-            c = set(self.loc[self[(vs2, 'regulation')] == 'up', ('_', key)].values)
-            d = set(self.loc[self[(vs2, 'regulation')] == 'dn', ('_', key)].values)
+        if metabo_idx:
+            a = set(df1.loc[df1['regulation'] == 'up', metabo_idx].tolist())
+            b = set(df1.loc[df1['regulation'] == 'dn', metabo_idx].tolist())
+            c = set(df2.loc[df2['regulation'] == 'up', metabo_idx].tolist())
+            d = set(df2.loc[df2['regulation'] == 'dn', metabo_idx].tolist())
         else:
-            a = set(self[self[(vs1, 'regulation')] == 'up'].index.values)
-            b = set(self[self[(vs1, 'regulation')] == 'dn'].index.values)
-            c = set(self[self[(vs2, 'regulation')] == 'up'].index.values)
-            d = set(self[self[(vs2, 'regulation')] == 'dn'].index.values)
+            a = set(df1.loc[df1['regulation'] == 'up'].index.tolist())
+            b = set(df1.loc[df1['regulation'] == 'dn'].index.tolist())
+            c = set(df2.loc[df2['regulation'] == 'up'].index.tolist())
+            d = set(df2.loc[df2['regulation'] == 'dn'].index.tolist())    
         # gather data for venn plot
         if pattern in ('anti', 'syn'):
             data = {vs1+' up'  : a,
@@ -323,14 +374,12 @@ class Metab(pd.DataFrame):
                     vs2+' up'  : c,
                     vs2+' down': d}                        
         elif pattern == 'var':
-            data = {vs1: set(a|b),
-                    vs2: set(c|d)}
+            data = {vs1: a | b,
+                    vs2: c | d}
         else:
             raise ValueError('The pattern should be one of  ("anti", "syn", "var")')
-        if save_to:
-            mzplt.venn(data, save_to = save_to)
-        else:
-            mzplt.venn(data)
+
+        p_venn = mzplt.venn(data)
 
         # gather dem
         if pattern == 'anti':
@@ -340,12 +389,12 @@ class Metab(pd.DataFrame):
         elif pattern == 'var':
             dem = (a|b).intersection(c|d)
         
-        with open(save_to + '4_dem.txt', 'w') as txt_file:
-            ss = '\n'.join(dem)
-            txt_file.write(ss)
-        
-        self.to_csv(save_to + '0_full_data.tsv', sep = '\t', index=False)
-        return dem
+        return {'dem': dem,
+                'vs1': df1,
+                'vs2': df2,
+                'vs1_plot': p1,
+                'vs2_plot': p2,
+                'venn': p_venn}
 
     def plsda(self, groups:list=None,palette='Set1', save_to:str=None):
         # 准备数据
@@ -418,7 +467,7 @@ class Metab(pd.DataFrame):
            scheme,
            fc:float=1.5,
            p:float=0.05,
-           basic_info_on=['Average Rt(min)', 'Average Mz', 'Metabolite name',
+           metabo_info_on=['Average Rt(min)', 'Average Mz', 'Metabolite name',
                           'Adduct type',  'Formula',         'Ontology',    'INCHIKEY',
                            'SMILES',      'Total score'],
            ms_on = 'msms',
@@ -445,60 +494,47 @@ class Metab(pd.DataFrame):
             - the vocano plot will be saved if set save_to
             - calculation results svaed into self data frame with scheme 'g1/g2'
         '''
-        schm = scheme.split('/')
-        if len(schm) != 2:
-            raise ValueError(f'calculation scheme must like G1/G2, not {scheme}!')
-        
-        nume, deno = schm[0], schm[1]
+        if scheme is None or (scheme==''):
+            raise ValueError(f'Unknown scheme ({scheme})! It must be 2 group names of / intervals.\n{self.groups}')
+        nume, deno = scheme.split('/')
+        if nume not in self.groups:
+            raise ValueError(f'{nume} is unknown group!')
+        elif deno not in self.groups:
+            raise ValueError(f'{deno} is unknown group!')
 
         log2FC = self.log2FC(nume=nume, deno=deno)
         fdr_p = self.ttest(nume, deno)
 
-        if basic_info_on:
+        if metabo_info_on:
             if ms_on and (ms_on in self['_'].columns):
                 # 自动续加ms列
-                basic_info_on.append(ms_on)
-            df = self['_'][list(set(basic_info_on))].copy()
+                metabo_info_on.append(ms_on)
+            df = self['_'][list(set(metabo_info_on))].copy()
         else:
             df = pd.DataFrame()        
 
 
         df['log2FC'] = log2FC
-        df['fdr_p'] = fdr_p
-        df['-log10 (FDR p-val)'] = -1 * np.log10(fdr_p)
+        df['FDR'] = fdr_p
+        df['-lg_FDR'] = -1 * np.log10(fdr_p)
         df['regulation'] = df['log2FC'].apply(
                 lambda x: 'up' if x > np.log2(fc) else (
                             'dn' if x < -np.log2(fc) else 'no')
         )
         ## 其次，所有p值不达标的均改为no
-        df['regulation'] = df[['regulation', 'fdr_p']].apply(lambda row: 'no' if row['fdr_p'] >= p \
+        df['regulation'] = df[['regulation', 'FDR']].apply(lambda row: 'no' if row['FDR'] >= p \
                                                    else row['regulation'],
                                                    axis=1)
 
         # ploting vocano digram
-        plot = mzplt.volcano(df, x='log2FC', y='-log10 (FDR p-val)', fill='regulation',
+        plot = mzplt.volcano(df, x='log2FC', y='-lg_FDR', fill='regulation',
                                xcut = np.log2(fc),
                                ycut = -np.log10(p),
                                title = f'{nume} / {deno}',
                                palette = palette,
                                save_to=save_fig_to)
-        return PeakFrame(df), plot        
-
-    def wash_metabolites(self, total_score=1.0, keep_first_by='INCHIKEY'):
-        '''  
-        drop off unknown ions ans drop duplicated metabolites.
-        param:
-            total_score, cutoff value for total score
-        '''
-        df = self[self[('_', 'MS/MS matched')]].copy()
-        df = df[df[('_', 'Total score')] > total_score]
-        df = df.sort_values(by=('_', keep_first_by), ascending=False)
-        df = df.drop_duplicates(subset=[('_', 'INCHIKEY')])
-        df.index = df[('_', 'Metabolite name')].str.split(';', expand=True)[0].to_list()
-        # 没有处理零值问题
-        return df
+        return PeakFrame(df), plot    
     
-
 
 
 
@@ -522,7 +558,7 @@ def parse_ms_data_to_array(ms_string):
 
     
 
-def read_msd_ali(fpath:str, drop_null_ms=True):
+def read_msd_ali(fpath:str, drop_null_ms=True, drop_duplicated_metablites=False):
     '''
     fpath: file path of MSdial-exported txt file 
     '''
@@ -539,15 +575,13 @@ def read_msd_ali(fpath:str, drop_null_ms=True):
     df = Metab(df)
 
     if drop_null_ms:
-        df = df[df[('_', 'MS/MS spectrum')].notnull()].reset_index(drop=True)
-        df[('_', 'msms')] = df[('_', 'MS/MS spectrum')].apply(parse_ms_data_to_array)
-        df.drop(columns=('_', 'MS/MS spectrum'))
+        df = df.drop_null_msms()
 
-    df = df.set_index(('_', 'Alignment ID'))
-    # 重命名行索引为 'Alignment ID'
-    df = df.rename_axis('Alignment ID')
-
-    return df
+    if drop_duplicated_metablites:
+        df = df.gather_metabolites()
+        # 提取kid, 依赖于本地库中代谢物名的记录规范
+        df[('_', 'kid')] = df[('_', 'Metabolite name')].str.split('|').str[0]
+    return df.reset_index(drop=True)
 
 
 

@@ -13,9 +13,9 @@ from sklearn.decomposition import PCA
 
 class Plot():
     def __init__(self, base_theme = None,
-                fontsize = 12,
+                fontsize = 20,
                 figure_size = (5, 5),
-                dpi = 120):
+                dpi = 96):
         if base_theme == None:
             base_theme = theme_matplotlib()
 
@@ -539,3 +539,6 @@ class Venn:
         ]
         for x, y, text in label_positions:
             self._draw_text(x, y, text)
+    
+    def save(self, fname, dpi=300, transparent=True):
+        return self.fig.savefig(fname=fname, dpi=dpi, transparent=transparent)

@@ -278,9 +278,9 @@ class PeakFrame(pd.DataFrame):
                            mz_on='precursormz',
                            msms_on='msms',
                            tol=(0.003, 0.005),
-                           sim_thd=0.9,
-                           sim_type='bonanza',
-                           keep_first_on = None):
+                           sim_thd={'bonanza':0.9, 'entropy':0.9, 'matched_ratio': 0.25},
+                           keep_first_on = None,
+                           ascending=False):
         '''
         drop duplicated msms
 
@@ -299,8 +299,13 @@ class PeakFrame(pd.DataFrame):
         return
             a data frame after deduplicates.
         '''
+        scores_names = {'matched_count', 'matched_ratio', 'bonanza', 'simple_dot', 'modified_dot', 'entropy'}
+        keys = set(sim_thd.keys())
+        if not keys <= scores_names:
+            raise ValueError(f'keys unacceptable: {keys-scores_names}.\n{scores_names}')
+        
         if keep_first_on:
-            df = self.sort_values(by=keep_first_on).copy().reset_index()
+            df = self.sort_values(by=keep_first_on, ascending=ascending).copy().reset_index()
         else:
             df = self.copy()
 
@@ -308,7 +313,11 @@ class PeakFrame(pd.DataFrame):
                           msms_on=msms_on,
                           tol=tol)
         
-        idx_to_drop = scores.loc[scores[sim_type] > sim_thd, 'que_idx'].unique().tolist()
+        condition = True
+        for key in sim_thd:
+            condition = condition & (scores[key] > sim_thd[key])
+
+        idx_to_drop = scores.loc[condition, 'que_idx'].unique().tolist()
         return df.drop(index=idx_to_drop)
 
     def eic(self, target_mz,
@@ -334,21 +343,22 @@ class PeakFrame(pd.DataFrame):
                que_mz_on = None,
                que_msms_on = None,
                tol = (0.003, 0.005),
-               sim_thd= [0.9, 0.9, 0.9],  # similarity cut off for jaccard, bonanza, and cosine
+               sim_thd= {'bonanza':0.9, 'entropy':0.9},
                test_method = 'fisher',
                fdr = True): # return enrich data frame
         '''
-        ## Be caution: this fuction need furtherly validation.
-        Match based on the self ions and que ions,
-            and enrich by rows according to the matches.
+        
+             # (matched_count, matched_ratio, bonanza, simple_dot, modified_dot, entropy)
         '''      
-
 
         if not isinstance(que, self.__class__):
             raise TypeError(f'que is not {self.__class__.__name__} object!')
-        if len(sim_thd) < 3 :
-            raise ValueError(f'length of sim_thd must be 3: {sim_thd}')
         
+        scores_names = {'matched_count', 'matched_ratio', 'bonanza', 'simple_dot', 'modified_dot', 'entropy'}
+        keys = set(sim_thd.keys())
+        if not keys <= scores_names:
+            raise ValueError(f'keys unacceptable: {keys-scores_names}.\n{scores_names}')
+                
         # 按 'tcm_name' 列分组
         grouped = self.groupby(target_on)
         # 将每个分组转换为子表，并存储到列表中
@@ -365,12 +375,14 @@ class PeakFrame(pd.DataFrame):
                               que_mz_on=que_mz_on,
                               que_msms_on=que_msms_on,
                               tol=tol)
-            matched_condition = (scores['jaccard'] > sim_thd[0]) & \
-                                (scores['bonanza'] > sim_thd[1]) & \
-                                (scores['cosine']  > sim_thd[2])
-            n_match = scores.loc[matched_condition, 'idx'].nunique()
+
+            condition = True
+            for key in sim_thd:
+                condition = condition & (scores[key] > sim_thd[key]) 
+           
+            n_match = scores.loc[condition, 'idx'].nunique()
             matches.append({target_on: target,
-                            'n_match': n_match})
+                            'n_match': n_match}) 
 
         matches = pd.DataFrame(matches)
         matches = matches[matches['n_match'] > 0].sort_values(by='n_match', ascending=False)
@@ -394,7 +406,7 @@ class PeakFrame(pd.DataFrame):
         return enr
     
     
-    def find_precursor_type(self, target_mass, ionmode):
+    def find_precursor_type(self, target_mass, ionmode, mz_on):
         '''
         find out precursor type according to the target compound mass (target_mass)
         param:
@@ -404,6 +416,7 @@ class PeakFrame(pd.DataFrame):
             mzfram containing matched results.
         '''
         from .precursorType import load_precursors
+        from . import mz
         df = self.copy()
         df['Num Peaks'] = df['Num Peaks'].astype(int)
         df = df[df['Num Peaks'] > 0]
@@ -411,12 +424,30 @@ class PeakFrame(pd.DataFrame):
         pcs = load_precursors(target_mass, ionmode)
         pcs = pcs[pcs['mz'] > 70]
         for idx in df.index:
-            mz = df.loc[idx, 'precursormz']
             for j in pcs.index:
-                if mz.match_mz(mz, pcs.loc[j, 'mz']) == True:                    
+                if mz.match(df.loc[idx, mz_on], pcs.loc[j, 'mz']) == True:                    
                     df.loc[idx,'precursortype'] = pcs.loc[j, 'type']
                     break
         return df[df['precursortype'] != '']
+    
+
+    def flat_msms_mz(self, intensity_tol=0, msms_on='msms', num_peaks_on = 'Num Peaks'):
+        '''
+        Obtain a flat array consisting of all mz values in ms2
+        param:
+            intensity_tol, intensity tolerance in msms
+            msms_on, the column name of msms
+            num_peaks_on, the name of column of "Num Peaks"
+        '''
+        msms = self.loc[self[num_peaks_on] > 0, msms_on]
+
+        mz_values = [pair[0]            # 取第一列元素
+                    for sub in msms       # sub = [] 或 [[x1,y1], [x2,y2], ...]
+                    for pair in sub
+                    if pair[1] > intensity_tol]   # pair = [x, y]
+
+        return np.array(mz_values, dtype=float)
+
     
     def match(self,
               que=None,
@@ -452,24 +483,28 @@ class PeakFrame(pd.DataFrame):
                 if que_msms_on not in que.columns:
                     raise ValueError(f'not found the columns name {que_msms_on}')
         
-        self_msl = similarity.prepare_ms_list(self[mz_on].values, self[msms_on].values)
+        self_msl = similarity.join_array(self[mz_on].values, self[msms_on].values)
         if que is not None:
-            que_msl = similarity.prepare_ms_list(que[que_mz_on].values, que[que_msms_on].values)
+            que_msl = similarity.join_array(que[que_mz_on].values, que[que_msms_on].values)
         else:
             que_msl = None
             
-        similarity.warmup(self_msl[0:2], self_msl[1:3]) 
-        matched_counts, jaccard, bonanza, cosine = similarity.get_scores_batch(self_msl, que_msl, tol)
-
-        df_counts = pd.DataFrame(matched_counts).stack().rename_axis(['idx', 'que_idx']).reset_index(name='matched_counts')  
-        df_jaccard= pd.DataFrame(jaccard).stack().rename_axis(['idx', 'que_idx']).reset_index(name='jaccard')
-        df_bonanza = pd.DataFrame(bonanza).stack().rename_axis(['idx', 'que_idx']).reset_index(name='bonanza')  
-        df_cosine = pd.DataFrame(cosine).stack().rename_axis(['idx', 'que_idx']).reset_index(name='cosine')   
+        scores= similarity.get_scores_batch(self_msl, que_msl, tol)
+        # (matched_count, matched_ratio, bonanza, simple_dot, modified_dot, entropy) by batch
+        df_counts   = pd.DataFrame(scores[0]).stack().rename_axis(['idx', 'que_idx']).reset_index(name='matched_counts')
+        df_mt_ratio = pd.DataFrame(scores[1]).stack().rename_axis(['idx', 'que_idx']).reset_index(name='matched_ratio')    
+        df_bonanza  = pd.DataFrame(scores[2]).stack().rename_axis(['idx', 'que_idx']).reset_index(name='bonanza')  
+        df_smp_dot  = pd.DataFrame(scores[3]).stack().rename_axis(['idx', 'que_idx']).reset_index(name='simple_dot')
+        df_mod_dot  = pd.DataFrame(scores[4]).stack().rename_axis(['idx', 'que_idx']).reset_index(name='modified_dot')  
+        df_entropy  = pd.DataFrame(scores[5]).stack().rename_axis(['idx', 'que_idx']).reset_index(name='entropy')   
+        #! 保持顺序一致，self.enrich函数的计算逻辑，依赖这个顺序
 
         # 合并所有数据框  
-        df = df_counts.merge(df_jaccard, on=['idx', 'que_idx'])\
-                      .merge(df_bonanza, on=['idx', 'que_idx']) \
-                      .merge(df_cosine,  on=['idx', 'que_idx']) 
+        df = df_counts.merge(df_mt_ratio, on=['idx', 'que_idx']) \
+                      .merge(df_bonanza,  on=['idx', 'que_idx']) \
+                      .merge(df_smp_dot,  on=['idx', 'que_idx']) \
+                      .merge(df_mod_dot,  on=['idx', 'que_idx']) \
+                      .merge(df_entropy,  on=['idx', 'que_idx']) \
         
         ## 位置索引转换为行索引
         df['idx'] = self.index[df['idx'].tolist()]
