@@ -18,7 +18,7 @@ import re
 from tqdm import tqdm
 import warnings
 
-from . import mz
+from . import ms, mz
 from . import similarity
 from .stat import enrich_df
 
@@ -26,7 +26,7 @@ from .stat import enrich_df
 ### basic function for PeakFrame
 def concat(mzframe_list, msms_on='msms', ignore_index=False):
     for df in mzframe_list:
-        df[msms_on] = df[msms_on].apply(mz.to_str)
+        df[msms_on] = df[msms_on].apply(str)
     rst = pd.concat(mzframe_list, ignore_index=ignore_index)
     rst[msms_on] = rst[msms_on].apply(ast.literal_eval)   
     
@@ -87,7 +87,8 @@ class Ion():
         elif str(ionmode).lower() in ('-', 'n', 'neg', 'negative'):
             self.ionmode = 'Negative'
 
-        self.msms = mz.normalize(msms)   
+        msms_data = ms.MSdata(msms)
+        self.msms = msms_data.normalize()   
 
     def __contains__(self, key):
         return key in self.__slots__
@@ -124,15 +125,17 @@ class Ion():
         for k in data:
             nk = re.sub(r'[^a-zA-Z]', '', k).lower()
             if nk in ion.__slots__:
-                ion.__setattr__(nk, data[k])  
-    def centroid(self,
-                    window_threshold_rate: float=0.33,
-                    mz_slice_width: float=0.1,
-                    n_peaks_threshold:int = 1):
-        return mz.centroid(self.msms,
-                            window_threshold_rate,
-                            mz_slice_width,
-                            n_peaks_threshold)  
+                ion.__setattr__(nk, data[k]) 
+
+    # def centroid(self,
+    #                 window_threshold_rate: float=0.33,
+    #                 mz_slice_width: float=0.1,
+    #                 n_peaks_threshold:int = 1):
+    #     data = ms
+    #     return mz.centroid(self.msms,
+    #                         window_threshold_rate,
+    #                         mz_slice_width,
+    #                         n_peaks_threshold)  
     
     def drop_ms2_below(self, drop_min=0):
         self.msms = self.msms[self.msms[:, 1] >= drop_min]
@@ -243,7 +246,9 @@ class PeakFrame(pd.DataFrame):
         return ion
     
     def centroid_msms(self):
-        self['msms'] = self['msms'].apply(lambda x: mz.centroid(x))
+        def centroid(data):
+            return ms.MSdata(data)
+        self['msms'] = self['msms'].apply(lambda x: centroid(x))
 
 
     ### plot chromatography

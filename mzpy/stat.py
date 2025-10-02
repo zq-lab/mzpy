@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from scipy import stats
 from statsmodels.stats.multitest import fdrcorrection 
 
@@ -130,3 +131,98 @@ def hypergeom(df, n_total_feature, n_total_hit, fdr=True, method='greater'):
         return corrected_pval  
     else:  
         return pval 
+    
+
+
+def plsda(X, y, n_components=2):
+    '''
+    X, a matrix, rows are samples, columns are features (genes, proteins, or metabolites)   
+    y, group factor (numpy 1d array)
+    '''
+    from sklearn.cross_decomposition import PLSRegression
+    from sklearn.preprocessing import OneHotEncoder
+    from sklearn.model_selection import StratifiedKFold
+    from sklearn.metrics import accuracy_score, confusion_matrix, classification_report, roc_auc_score
+  
+    # 对 y 进行独热编码
+    enc = OneHotEncoder(sparse_output=False, dtype=float)
+    Y = enc.fit_transform(np.array(y).reshape(-1, 1))
+    class_names = enc.categories_[0].tolist()
+
+    # 拟合 PLS-DA 模型
+    pls = PLSRegression(n_components=n_components, scale=False)
+    pls.fit(X, Y)
+
+    # 得分（样本在潜变量空间的坐标）
+    T_scores = pls.x_scores_[:, :2]  # 选择前两个潜变量
+
+    # 交叉验证
+    # 计算每个类别的最小样本数
+    min_samples_per_class = min(pd.Series(y).value_counts())
+    n_splits = min(5, min_samples_per_class)  # 合理的折叠数
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+
+    def fit_and_predict(Xtr, ytr, Xte):
+        enc_cv = OneHotEncoder(sparse_output=False, dtype=float).fit(ytr.reshape(-1, 1))
+        Ytr = enc_cv.transform(ytr.reshape(-1, 1))
+        model = PLSRegression(n_components=n_components, scale=False).fit(Xtr, Ytr)
+        
+        Yte_hat = model.predict(Xte)
+        cols = enc_cv.categories_[0].tolist()
+        aligned = np.zeros((Yte_hat.shape[0], len(class_names)))
+        for j, cname in enumerate(cols):
+            aligned[:, class_names.index(cname)] = Yte_hat[:, j]
+        return aligned
+
+    # 生成折外预测
+    Yhat_cv = np.zeros((X.shape[0], len(class_names)))
+    for (tr, te) in cv.split(X, y):
+        Yhat_cv[te] = fit_and_predict(X[tr], y[tr], X[te])
+
+    y_cv = np.array(class_names)[np.argmax(Yhat_cv, axis=1)]
+    
+    # 计算评价指标
+    acc = accuracy_score(y, y_cv)
+    cm = confusion_matrix(y, y_cv, labels=class_names)
+    try:
+        auc_ovr = roc_auc_score(OneHotEncoder(sparse_output=False).fit_transform(np.array(y).reshape(-1, 1)),
+                                Yhat_cv, average="macro", multi_class="ovr")
+    except Exception:
+        auc_ovr = np.nan
+
+    # 打印结果
+    print(f"CV accuracy (5-fold): {acc:.3f}, macro-AUROC (OvR): {auc_ovr:.3f}")
+    print(pd.DataFrame(cm, index=class_names, columns=class_names))
+    print(classification_report(y, y_cv, target_names=class_names))
+
+    return pls, T_scores
+
+
+def vip_scores_plsda(pls_model):
+    """
+    计算 PLS-DA 的 VIP 分数（Wold VIP）。
+    - pls_model: 已拟合的 sklearn.cross_decomposition.PLSRegression
+      要求：已拟合，n_components = 你使用的成分数
+    返回：
+      vip: (n_features,) 的一维数组
+    """
+    T = pls_model.x_scores_            # (n_samples, n_comp)
+    W = pls_model.x_weights_           # (n_features, n_comp)
+    Q = pls_model.y_loadings_          # (n_targets, n_comp)  注意：多分类时 n_targets > 1
+
+    # 计算每个成分对 Y 的平方和贡献 SSY_k，形状 (n_comp,)
+    # 对于多响应 Y，SSY_k = sum_i || t_k * q_{i,k} ||^2 = (t_k^T t_k) * sum_i q_{i,k}^2
+    # 其中 t_k 是第 k 个 X-score（长度 n_samples），q_{i,k} 是第 k 个 Y-loading 的第 i 个分量
+    tt = np.sum(T**2, axis=0)             # (n_comp,)
+    qq = np.sum(Q**2, axis=0)             # (n_comp,)
+    SSY = tt * qq                          # (n_comp,)
+
+    # W 的每个成分的范数平方，用来归一化
+    Wnorm2 = np.sum(W**2, axis=0)          # (n_comp,)
+
+    p = W.shape[0]                         # n_features
+    vip = np.zeros(p)
+    for j in range(p):
+        weights_j = (W[j, :]**2) / Wnorm2  # (n_comp,)
+        vip[j] = np.sqrt(p * np.sum(SSY * weights_j) / np.sum(SSY))
+    return vip

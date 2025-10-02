@@ -227,27 +227,255 @@ class Plot():
         return plot
     
 
-    def pca(self, data, groups:list = None, labels:list = None,
-            palette='Set1',
-            save_to:str = None):
+    # def pca(self, data, groups:list = None, labels:list = None,
+    #         palette='Set1',
+    #         save_to:str = None):
+    #     pca = PCA(n_components=2).fit(data)        
+    #     df = pd.DataFrame(pca.transform(data), columns=['PC1', 'PC2'])
+    #     df['group'] = pd.Categorical(groups)
+    #     plot = (ggplot(df, aes('PC1', 'PC2', fill='group'))+
+    #             geom_point(alpha = 0.6, size = 3, shape = 'o', stroke = 0)+            
+    #             stat_ellipse(geom="polygon", level=0.95, alpha=0.2)+
+    #             labs(x = "PC1: %.1f %%"%(100*pca.explained_variance_ratio_[0]),
+    #                 y = "PC2: %.1f %%"%(100*pca.explained_variance_ratio_[1]))+
+    #             scale_fill_brewer(type='qualitative', palette=palette)+
+    #             self.theme
+    #     )
+    #     if labels is not None:
+    #         df['label'] = labels
+    #         plot = plot + geom_text(label=df.label, nudge_x=0.1, nudge_y=0.1,
+    #                           size = self.fontsize*0.6)
+    #     if save_to:
+    #         plot.save(save_to, transparent=True)
+    #     return plot
+
+    def pca(self, data, groups: list = None, labels: list = None,
+            palette='Set2',
+            draw_ellipse: bool = True,
+            min_samples_for_ellipse: int = 4, # 如果样本数太少，比如3个样本，plotnine不会绘制椭圆
+            save_to: str = None):
+        '''
+        data, a matrix, rows are samples, columns are features (genes, proteins, or metabolites)        
+        '''
+
         pca = PCA(n_components=2).fit(data)        
         df = pd.DataFrame(pca.transform(data), columns=['PC1', 'PC2'])
         df['group'] = pd.Categorical(groups)
+        
         plot = (ggplot(df, aes('PC1', 'PC2', fill='group'))+
                 geom_point(alpha = 0.6, size = 3, shape = 'o', stroke = 0)+            
-                stat_ellipse(geom="polygon", level=0.95, alpha=0.2)+
                 labs(x = "PC1: %.1f %%"%(100*pca.explained_variance_ratio_[0]),
                     y = "PC2: %.1f %%"%(100*pca.explained_variance_ratio_[1]))+
                 scale_fill_brewer(type='qualitative', palette=palette)+
                 self.theme
         )
+        
+        # 检查是否绘制椭圆
+        if draw_ellipse and groups is not None:
+            # 检查每个分组的样本数量
+            group_counts = pd.Series(groups).value_counts()
+            min_count = group_counts.min()
+            
+            if min_count >= min_samples_for_ellipse:
+                plot = plot + stat_ellipse(geom="polygon", level=0.95, alpha=0.2)
+            else:
+                info = f'Warning: Minimum number of samples per group is {min_count}, '
+                info = info + f'less than {min_samples_for_ellipse}, skip drawing the ellipse'
+                print(info)
+        
         if labels is not None:
             df['label'] = labels
             plot = plot + geom_text(label=df.label, nudge_x=0.1, nudge_y=0.1,
-                              size = self.fontsize*0.6)
+                            size = self.fontsize*0.6)
         if save_to:
             plot.save(save_to, transparent=True)
         return plot
+    
+    def pca_sns(self, data, groups: list = None, labels: list = None,
+                palette='Set2',
+                draw_ellipse: bool = True,
+                min_samples_for_ellipse: int = 3,
+                save_to: str = None):
+        '''
+        data, a matrix, rows are samples, columns are features (genes, proteins, or metabolites)
+        pca函数使用plotnine绘图，当样本数低于4时，无法绘制置信椭圆
+        本函数采用sns绘图，手动添加上置信椭圆图，即使样本数低于4，也可绘制椭圆图
+        
+        '''
+        
+        from matplotlib.patches import Ellipse
+        from scipy.stats import chi2
+
+        # 1) PCA分析
+        pca = PCA(n_components=2, random_state=42)
+        scores = pca.fit_transform(data)  # 假设 data 是特征矩阵
+
+        # 2) 组装 DataFrame 以便按组绘图
+        df = pd.DataFrame(scores, columns=["PC1", "PC2"])
+        if groups is not None:
+            df["condition"] = groups
+        else:
+            df["condition"] = labels
+
+        expl = pca.explained_variance_ratio_  # PC1和PC2的解释度
+        print(f'Interpretability: {expl}')
+
+        # 3) 置信椭圆函数
+        def plot_confidence_ellipse(data2d, ax, edgecolor="black", facecolor=None,
+                                    alpha=0.15, linewidth=1.0, z=0.95):
+            if data2d.shape[0] < 2:
+                return
+            cov = np.cov(data2d, rowvar=False)
+            mean = data2d.mean(axis=0)
+
+            # 特征分解获取主轴与方差
+            vals, vecs = np.linalg.eigh(cov)
+            order = vals.argsort()[::-1]
+            vals, vecs = vals[order], vecs[:, order]
+
+            # 椭圆旋转角度（度）
+            theta = np.degrees(np.arctan2(vecs[1, 0], vecs[0, 0]))
+
+            # 2维卡方阈值：sqrt(chi2.ppf(z, df=2))
+            chi2_val = chi2.ppf(z, df=2)
+            width, height = 2 * np.sqrt(vals * chi2_val)  # 直径 = 2×半轴
+
+            ell = Ellipse(
+                xy=mean, width=width, height=height, angle=theta,
+                edgecolor=edgecolor, facecolor=facecolor if facecolor is not None else edgecolor,
+                alpha=alpha, linewidth=linewidth
+            )
+            ax.add_patch(ell)
+
+        # 4) 绘图
+        plt.figure(figsize=(4, 4), dpi=140)
+        ax = plt.gca()
+
+        palette = sns.color_palette(palette, n_colors=df["condition"].nunique())
+        sns.scatterplot(
+            data=df, x="PC1", y="PC2", hue="condition",
+            s=30, edgecolor="white", linewidth=1.0, palette=palette, ax=ax
+        )
+
+        # 为每个分组叠加置信椭圆
+        color_map = dict(zip(df["condition"].unique(), palette))
+        for g in df["condition"].unique():
+            sub = df[df["condition"] == g][["PC1", "PC2"]].values
+            if len(sub) >= min_samples_for_ellipse and draw_ellipse:  # 检查条件
+                plot_confidence_ellipse(sub, ax, edgecolor=color_map[g], facecolor=color_map[g], z=0.95)
+
+        x_min, x_max = ax.get_xlim()
+        y_min, y_max = ax.get_ylim()
+
+        pad_x = 0.2 * (x_max - x_min)  # 20% 外边距
+        pad_y = 0.2 * (y_max - y_min)
+
+        ax.set_xlim(x_min - pad_x, x_max + pad_x)
+        ax.set_ylim(y_min - pad_y, y_max + pad_y)
+
+        ax.set_xlabel(f"PC1 ({expl[0] * 100:.1f}%)")
+        ax.set_ylabel(f"PC2 ({expl[1] * 100:.1f}%)")
+        ax.set_title("PCA with 95% Confidence Ellipses")
+
+        plt.legend(title="Condition", frameon=False)
+        plt.tight_layout()
+
+        # 保存图像
+        if save_to is not None:
+            plt.savefig(save_to)
+        
+        plt.show()
+    
+    
+
+    def plsda_plt(self, T_scores, y, save_to=None):
+        """
+        绘制 PLS 结果和决策区域并可选择保存图像。
+        
+        参数：
+        - T_scores: PLS 变换后的得分 (n_samples, n_components) 的数组。
+        - y: 分组标签 (n_samples,) 的数组或列表。
+        - class_names: 分组的类别名称列表。
+        - save_to: 保存图像的文件名，默认为 None（即不保存）。
+        """
+
+        from sklearn.linear_model import LogisticRegression
+
+        class_names = np.unique(y)
+
+        # 得分 DataFrame
+        df_scores = pd.DataFrame(T_scores, columns=["LV1", "LV2"])
+        df_scores["group"] = y
+
+        # 1) 在得分空间上拟合一个简单分类器用于画决策边界
+        clf = LogisticRegression(multi_class="auto", max_iter=1000)
+        clf.fit(df_scores[["LV1", "LV2"]].to_numpy(), y)
+
+        # 2) 创建网格
+        pad = 0.10  # 边界留白比例
+        x_min, x_max = df_scores["LV1"].min(), df_scores["LV1"].max()
+        y_min, y_max = df_scores["LV2"].min(), df_scores["LV2"].max()
+        x_pad = (x_max - x_min) * pad
+        y_pad = (y_max - y_min) * pad
+        x_min, x_max = x_min - x_pad, x_max + x_pad
+        y_min, y_max = y_min - y_pad, y_max + y_pad
+
+        xx, yy = np.meshgrid(
+            np.linspace(x_min, x_max, 400),
+            np.linspace(y_min, y_max, 400)
+        )
+        grid = np.c_[xx.ravel(), yy.ravel()]
+
+        # 3) 预测网格类别（或概率）
+        Z = clf.predict(grid)  # 类别标签
+        Z = Z.reshape(xx.shape)
+
+        # 4) 绘图
+        plt.figure(figsize=(4, 4), dpi=140)
+        ax = plt.gca()
+        palette = sns.color_palette("Set2", n_colors=len(class_names))
+        palette_map = {c: col for c, col in zip(class_names, palette)}
+
+        # 决策区域底图（使用较浅的颜色）
+        from matplotlib.colors import ListedColormap
+        idx_map = {c: i for i, c in enumerate(class_names)}
+        Z_idx = np.vectorize(idx_map.get)(Z)
+        cmap_light = ListedColormap([sns.desaturate(palette_map[c], 0.9) for c in class_names])
+
+        ax.contourf(xx, yy, Z_idx, alpha=0.25, cmap=cmap_light, levels=len(class_names))
+
+        # 决策边界线（等概率/分界线）
+        ax.contour(xx, yy, Z_idx, levels=np.arange(len(class_names)), colors="k", alpha=0.2, linewidths=0.8)
+
+        # 叠加样本散点
+        sns.scatterplot(
+            data=df_scores, x="LV1", y="LV2", hue="group",
+            s=30, edgecolor="none", linewidth=1.0,
+            palette=palette, ax=ax
+        )
+
+        # 标注与样式
+        ax.set_xlabel("LV1 (PLS-DA)")
+        ax.set_ylabel("LV2 (PLS-DA)")
+        ax.set_title("PLS-DA scores with decision regions")
+
+        # 方框坐标轴
+        for s in ax.spines.values():
+            s.set_visible(True)
+            s.set_linewidth(1.2)
+
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
+        ax.legend(title="Group", frameon=False)
+        plt.tight_layout()
+
+        # 保存图像
+        if save_to is not None:
+            plt.savefig(save_to)
+            print(f"The plot is saved to: {save_to}")
+        
+        plt.show()
+
 
     def swatch_colors(self, colors):
         # 设置色块的大小（1.5 cm）  
