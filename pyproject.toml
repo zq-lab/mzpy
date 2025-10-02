@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=69", "wheel", "build"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mzpy"                         # 发布到 PyPI 的名称（全局唯一）
+version = "0.1.0"                            # 版本号，遵循语义化版本
+description = "A pandas-derived tool for MS data processing"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+authors = [
+  { name = "Qiang Zhang", email = "zhangq@nwsuaf.edu.cn" }
+]
+keywords = ["pandas-like", "mass-spectrometry", "mzpy", "ms", "data-processing"]
+classifiers = [
+    "Programming Language :: Python :: Implementation :: CPython"
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+  "requests>=2.31.0"
+]
+
+# 指定源代码在 src 下
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# 如果需要包含包内数据文件（非 .py）
+[tool.setuptools.package-data]
+mzpy = ["mass.csv"]
+
+[tool.setuptools.include-package-data]
+include-package-data = true
+
+# 命令行入口（安装后可直接用命令运行）
+[project.scripts]
+mzpy = "mzpy.core:main"
