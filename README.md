@@ -1,6 +1,8 @@
 
 # mzpy
 
+**Oct 1, 2025**
+
 mzpy is a lightweight Python toolkit for mass spectrometry data processing with a focus on MS/MS (fragmentation) analysis. It provides:
 
 - A NumPy-based container for spectra (MSdata)
