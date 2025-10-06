@@ -267,10 +267,11 @@ annot = df.find_precursor_type(target_mass=300.1234, ionmode='pos', mz_on='precu
 
 ## License
 
-MIT (adjust as appropriate for your project)
+GNU General Public License v3.0
 
 ## Citation
 
 If you use mzpy in academic work, please cite the repository:
 - GitHub: https://github.com/zq-lab/mzpy
+
 
