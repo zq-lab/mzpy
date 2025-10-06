@@ -1,44 +1,36 @@
 [build-system]
-requires = ["setuptools>=69", "wheel", "build"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mzpy"                         # 发布到 PyPI 的名称（全局唯一）
-version = "0.1.0"                            # 版本号，遵循语义化版本
-description = "A pandas-derived tool for MS data processing"
+name = "mzpy"
+version = "0.3.1"
+description = "A pandas-like toolkit for MS data handling"
 readme = "README.md"
 requires-python = ">=3.8"
-license = { file = "LICENSE" }
-authors = [
-  { name = "Qiang Zhang", email = "zhangq@nwsuaf.edu.cn" }
-]
-keywords = ["pandas-like", "mass-spectrometry", "mzpy", "ms", "data-processing"]
-classifiers = [
-    "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
-    "Operating System :: OS Independent",
-]
-
+authors = [{ name = "zq-lab", email = "zhangq@nwsuaf.edu.cn" }]
 dependencies = [
-  "requests>=2.31.0"
+    "igraph==0.11.9",
+    "numba==0.60.0",
+    "numpy==2.0.2",
+    "pandas==2.2.3",
+    "plotnine==0.14.5",
+    "pycairo==1.28.0",
+    "rdkit==2024.9.1",
+    "requests==2.32.3",
+    "scikit-learn==1.6.0",
+    "scipy==1.15.0",
+    "seaborn==0.13.2",
+    "tomli==2.0.1",
+    "tqdm==4.67.1"
 ]
 
-# 指定源代码在 src 下
-[tool.setuptools.packages.find]
-where = ["src"]
-
-# 如果需要包含包内数据文件（非 .py）
-[tool.setuptools.package-data]
-mzpy = ["mass.csv"]
-
-[tool.setuptools.include-package-data]
+[tool.setuptools]
 include-package-data = true
 
-# 命令行入口（安装后可直接用命令运行）
-[project.scripts]
-mzpy = "mzpy.core:main"
+[tool.setuptools.packages.find]
+where = ["."]
+
+# 如需包含包内数据文件
+[tool.setuptools.package-data]
+your_package = ["mass.csv"]

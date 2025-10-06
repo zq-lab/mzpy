@@ -1,61 +1,276 @@
+
 # mzpy
 
-Mzpy is a comprehensive toolkit for LC-MS data processing and metabolomics-related tasks. The toolkit includes a variety of Python scripts, each focusing on specific aspects of data handling, enrichment analysis, visualization, and integration with external databases. This Toolkit requires Python version 3.11. Please ensure that you have this version installed before setting up the environment.
+mzpy is a lightweight Python toolkit for mass spectrometry data processing with a focus on MS/MS (fragmentation) analysis. It provides:
 
-## Environment Setup
+- A NumPy-based container for spectra (MSdata)
+- Utilities for m/z matching and de-duplication
+- Robust MS/MS similarity scoring (Bonanza, cosine variants, entropy)
+- A Pandas-like PeakFrame for handling MSP/MGF-style records, matching spectra in batch, and exporting/importing formats
+- Precursor type helpers for adduct/loss inference
 
-### 1. **Using Conda (environment.yml)**
-   ```bash
-   conda env create -f environment.yml
-   ```
+The library borrows and re-implements ideas from MS-DIAL scoring for consistent, reproducible analysis.
 
-### 2. **Using Pip (requirements.txt)**
-   ```bash
-   pip install -r requirements.txt
-   ```
+## Features at a glance
 
-## Scripts Overview
+- MSdata: ndarray subclass to hold spectra as [mz, intensity], with normalization, centroiding, basic filtering.
+- m/z utils: absolute and ppm matching, array matching, and deduplication.
+- Similarity: Numba-accelerated alignment and multiple similarity metrics (matched peaks, Bonanza, cosine, modified cosine, spectral entropy, reverse dot).
+- Batch scoring: compute multiple similarity matrices efficiently.
+- PeakFrame: a Pandas DataFrame subclass to parse, normalize, match, filter, export, and visualize MS/MS peak lists.
+- Precursor type: enumerate plausible adduct/loss types and m/z for a given exact mass.
 
-### 1. **hmdb.py: HMDB Data Processor**
-   - **Functionality:** Processes Human Metabolome Database (HMDB) XML data sheets.
-   - **Key Features:**
-     - Extraction of physiological effects and disease information.
-     - Collection of compound details (e.g., name, SMILES, InChIKey).
-     - Conversion of XML data into Pandas DataFrames.
-     - Enrichment analysis for disease data.
+## Installation
 
-### 2. **metab.py: Metabolomics Data Module**
-   - **Functionality:** Handles metabolomics data, including processing, imputation, and enrichment analysis.
-   - **Key Classes:**
-     - `Metab`: Subclass of Pandas DataFrame for storing and manipulating metabolomics data.
-     - `Enrichment`: Subclass for conducting enrichment analysis.
-     - `RaMP`: Class for interacting with the Rat Metabolomic Portal (RaMP) database.
+- From PyPI:
+  - `pip install mzpy`
 
-### 3. **mzFrame.py: Mass Spectrometry Data Processor**
-   - **Functionality:** Focuses on processing mass spectrometry data, particularly MS/MS data.
-   - **Key Features:**
-     - Conversion of profile-style data to centroid-style.
-     - Handling and analyzing precursor ions.
+- From source (editable):
+  - `git clone https://github.com/<your-user>/mzpy.git`
+  - `cd mzpy`
+  - `pip install -e .`
 
-### 4. **NP_classify.py: Natural Products Classification**
-   - **Functionality:** Obtains classification information for natural products.
-   - **Key Features:**
-     - Classify natural products with [NP-Classifier](https://npclassifier.ucsd.edu/)
+Requirements (key):
+- numpy, pandas
+- numba
+- rdkit (for some precursor type utilities)
+- Optional: matplotlib (for plotting chromatograms via PeakFrame.plot_chrom)
 
-### 5. **plotfine.py: Plotting Toolkit**
-   - **Functionality:** Offers a versatile toolkit for creating bioinformatics plots with a unified style.
-   - **Key Features:**
-     - Bubble plots, lollipop plots, PCA plots, volcano plots, Venn diagrams.
-     - Customizable parameters for each plot type.
+## Quick start
 
-### 6. **pubchem.py: PubChem Compound Information Finder**
-   - **Functionality:** Finds compound information based on PubChem Compound ID, compound name, InChIKey, or other identifiers.
-   - **Key Features:**
-     - Utilizes the PubChem REST API for data retrieval.
+### 1) Represent spectra with MSdata
 
-## Contributors and Acknowledgments
+```python
+import numpy as np
+from mzpy.ms import MSdata
 
-- This toolkit was developed and is maintained by Zhang Qiang.
-- Contributions and bug reports are welcome. Feel free to create issues or submit pull requests.
+# Create from an array of [mz, intensity]
+arr = np.array([
+    [100.0, 10.0],
+    [101.0, 50.0],
+    [150.5, 5.0],
+])
+ms = MSdata(arr, to_normalized=True)  # normalizes intensity to 0–100
+print(ms.max_intensity_mz)  # m/z at max intensity
+print(ms.mz)                # m/z column
+```
 
-We hope this guide helps you set up the necessary environment for utilizing the Metabolomics Data Processing Toolkit. If you encounter any issues or have suggestions, please don't hesitate to reach out.
+MSdata includes:
+- `normalize(inpalce=True|False)`
+- `filter_out(threshold=...)`
+- `centroid(...)` for peak picking
+- `insert_precursormz(mz)` to prepend a precursor
+- `max_intensity_mz`, `max_mz`, `mz`, `intensity` properties
+
+### 2) m/z matching utilities
+
+```python
+import numpy as np
+from mzpy import mz
+
+# Single value matching
+mz.match(100.0000, 100.0025, tol=0.003, is_abs_error=True)  # True if within 0.003 Da
+
+# Arrays matching
+que = np.array([100.0, 101.0, 150.5])
+ref = np.array([100.002, 101.1, 150.5])
+que_unmatched, que_matched, ref_unmatched, ref_matched = mz.match_array(que, ref, tol=0.003)
+
+# Count matches
+n = mz.match_num(que, ref, tol=0.003)
+
+# Deduplicate m/z values
+uniq = mz.unique([100.0, 100.002, 101.0], tol=0.003)
+```
+
+### 3) Compute similarity between two spectra
+
+The similarity module aligns two MS/MS spectra then computes multiple metrics.
+
+```python
+import numpy as np
+from mzpy import similarity
+
+# Join precursor and fragments to form a spectrum (first row is precursor)
+ms_left  = similarity.join(precursormz=300.1234, msms=[[100.1, 50], [150.2, 100], [200.3, 30]])
+ms_right = similarity.join(precursormz=300.1235, msms=[[100.1, 45], [150.2, 95],  [199.9, 20]])
+
+# Alignment tolerance: tol=(precursor_tol_da, fragment_tol_da)
+scores = similarity.get_scores_weighted(
+    ms_left, ms_right, tol=(0.003, 0.005), method="weighted_average"
+)
+print(scores)
+# {
+#   'matched_peaks_ratio': ...,
+#   'spectral_entropy': ...,
+#   'modified_dot_product': ...,
+#   'bonanza_score': ...,
+#   'reverse_dot_product': ...,
+#   'simple_dot_product': ...,
+#   'total_score': ...
+# }
+```
+
+Under the hood:
+- `align(...)` (Numba) aligns two spectra by precursor and fragment tolerance.
+- Score functions are Numba-accelerated for speed:
+  - `get_matched_num`, `get_matched_peaks_score`
+  - `get_bonanza_score`
+  - `get_simple_dot_product` (cosine)
+  - `get_modified_dot_product_score`
+  - `get_entropy_similarity`
+  - `get_reverse_dot_product`
+
+For batch comparisons (matrix form):
+
+```python
+# Prepare a list of spectra, each from `similarity.join`
+query_list = [
+    similarity.join(300.1234, [[100.1, 50], [150.2, 100]]),
+    similarity.join(305.1111, [[120.1, 70], [160.2, 80]]),
+]
+ref_list = [
+    similarity.join(300.1236, [[100.1, 55], [150.2, 90]]),
+]
+
+matched_mx, ratio_mx, bonanza_mx, simple_mx, modified_mx, entropy_mx = \
+    similarity.get_scores_batch(query_list, ref_list, tol=(0.003, 0.005))
+```
+
+### 4) PeakFrame: Work with MSP/MGF-like datasets
+
+PeakFrame extends pandas.DataFrame for MS/MS records with an `MSMS` column as a list of [mz, intensity].
+
+Load an MSP file exported by MS-DIAL (v5.2+) or any MSP in the supported structure:
+
+```python
+from mzpy.peak import PeakFrame, read_msp, read_mgf
+
+# MSP from MS-DIAL (ensure the format matches PeakFrame._parse_msp_txt rules)
+df = read_msp("test/example.msp", sep_ms2="\t")  # test folder has example MSP files
+
+# Or read MGF
+mgf = read_mgf("test/example.mgf", sep_ms2=" ")
+
+# Update Num Peaks automatically
+df.update_num_peaks()
+print(df.head())
+```
+
+Match and score spectra between two PeakFrame objects (or within the same object):
+
+```python
+# Self-match to get pairwise similarities
+scores_long = df.match(tol=(0.003, 0.005))
+print(scores_long.head())
+# columns include:
+#   idx, que_idx, matched_counts, matched_ratio, bonanza, simple_dot, modified_dot, entropy
+
+# Match against another PeakFrame
+df2 = read_msp("test/example_ref.msp")
+scores_long2 = df.match(que=df2, tol=(0.003, 0.005))
+```
+
+Drop likely duplicate MS/MS entries using similarity thresholds:
+
+```python
+dedup = df.drop_duplicated_ms(
+    mz_on="precursormz",
+    MSMS_on="MSMS",
+    tol=(0.003, 0.005),
+    sim_thd={'bonanza': 0.9, 'entropy': 0.9, 'matched_ratio': 0.25},
+    keep_first_on=None
+)
+```
+
+Export MSP:
+
+```python
+df.to_msp("out.msp", standardized=True, MSMS_sep="\t", chunk_size=5000)
+```
+
+Other utilities:
+- `flatten_msms_mz(...)`: collect all fragment m/z into a flat array
+- `extract_ion_chrom(...)`: simple EIC extraction based on MS1 precursor m/z window
+- `find_precursor_type(target_mass, ionmode, mz_on)`: infer plausible precursor types and annotate rows
+- IO helpers: `read_pickle`, `read_sql`, `to_pickle`, `to_sqlite3`
+
+### 5) Precursor type suggestions
+
+```python
+from mzpy.precursorType import load_precursors
+
+# Enumerate precursor candidates for exact mass in a specific ion mode
+candidates = load_precursors(exact_mw=300.1234, mode='pos')  # or 'neg'
+print(candidates[['type', 'ionmode', 'charge', 'mz']].head())
+```
+
+Use with PeakFrame:
+
+```python
+annot = df.find_precursor_type(target_mass=300.1234, ionmode='pos', mz_on='precursormz')
+```
+
+## Data format notes
+
+- MS/MS (MSMS) is a list (or ndarray) of pairs: [mz, intensity].
+- Many functions normalize intensity to relative abundance (0–100).
+- Tolerances:
+  - Precursor: typically absolute Da tolerance (e.g., 0.003 Da).
+  - Fragments: typically absolute Da tolerance (e.g., 0.005 Da).
+  - ppm-based matching for single m/z values is supported via `mz.match(..., is_abs_error=False)`.
+
+## Examples and test data
+
+- The `test` folder contains example `.msp` files for quick experiments and demonstrations of the PeakFrame readers.
+- Try:
+  - `df = read_msp("test/your_example.msp")`
+  - `df.match(tol=(0.003, 0.005))`
+
+## API reference (selected)
+
+- mzpy.ms
+  - `MSdata(array, metadata=None, to_normalized=True)`
+  - `.centroid(...)`, `.normalize(...)`, `.filter_out(...)`, `.insert_precursormz(...)`
+  - Properties: `.mz`, `.intensity`, `.max_intensity_mz`, `.max_mz`
+- mzpy.mz
+  - `match(mz1, mz2, tol=0.003, is_abs_error=True)`
+  - `match_array(que, ref, tol=0.003)`
+  - `match_num(que, ref, tol=0.003)`
+  - `unique(mz_values, tol=0.003)`
+- mzpy.similarity
+  - `join(precursormz, msms, intensity=100)`
+  - `join_array(mz_list, msms_list, intensity=100)`
+  - `align(ms_left, ms_right, tol_precursor, tol_fragment)`  [Numba]
+  - Score functions (all Numba): `get_bonanza_score`, `get_simple_dot_product`, `get_modified_dot_product_score`, `get_entropy_similarity`, `get_reverse_dot_product`, `get_matched_num`, `get_matched_peaks_score`
+  - `get_scores(ms_left, ms_right, tol0, tol1)` [Numba; returns array]
+  - `get_scores_weighted(..., method="weighted_average")` [Python aggregation]
+  - `get_scores_batch(que_list, ref_list=None, tol=(...))`
+- mzpy.peak (PeakFrame)
+  - Readers: `read_msp`, `read_mgf`, `read_msd_msp`, `read_mona_msp`, `read_pickle`, `read_sql`
+  - Matching: `match`, `drop_duplicated_ms`, `match_counts`, `match_by_chunk_to_csv` (experimental)
+  - Utilities: `update_num_peaks`, `round_msms`, `flatten_msms_mz`, `extract_ion_chrom`, `find_precursor_type`
+  - Export: `to_msp`, `to_pickle`, `to_sqlite3`
+- mzpy.precursorType
+  - `load_precursors(exact_mw, mode='pos'|'neg')`
+
+## Performance notes
+
+- Core alignment and scoring functions are Numba-jitted for speed.
+- For very large tables, consider chunked matching (`match_by_chunk_to_csv`) or pre-filter by precursor m/z proximity to reduce pair counts.
+
+## Limitations and tips
+
+- Ensure MS/MS arrays do not contain NaN; normalization routines will raise errors.
+- Reverse dot product implementation notes in code comment indicate it may need review for specific analytical goals.
+- MSP parsing assumes simple “Key: Value” headers and two-column peak lines. For non-standard MSPs, you may adapt parsing or use `read_mona_msp`.
+
+## License
+
+MIT (adjust as appropriate for your project)
+
+## Citation
+
+If you use mzpy in academic work, please cite the repository:
+- GitHub: https://github.com/zq-lab/mzpy
+
