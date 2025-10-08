@@ -1,5 +1,5 @@
 
-# mzpy
+# mzpy: a pandas-like toolkit for MS data handling
 
 **Oct 1, 2025**
 
