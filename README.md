@@ -1,9 +1,5 @@
-
-<<<<<<< HEAD
 # mzpy: a pandas-like toolkit for MS data handling
 =======
-# mzpy
->>>>>>> parent of 909baad (mzpy-0.3.1_20251006)
 
 mzpy is a lightweight Python toolkit for mass spectrometry data processing with a focus on MS/MS (fragmentation) analysis. It provides:
 
