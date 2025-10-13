@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mzpy"
-version = "0.3.2"
+version = "0.3.3"
 description = "A pandas-like toolkit for MS data handling"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.8"

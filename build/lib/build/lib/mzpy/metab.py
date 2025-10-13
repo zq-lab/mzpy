@@ -1,26 +1,65 @@
 '''
-DEM analysis and enrichment
+Metabolism analysis and enrichment
     DEM, Differential Expression Metabolites
     A special DataFrame with secondary column headings
     and its associated DEM analysis and drawing method
 
     For MultiIndex, slice(None) can be used as placeholder: df[(slice(None), 'aa'), :]
-
-默认：Metabolite name的;分隔的第一个值是代谢物的关键索引值
-
 '''
 import numpy as np
 import pandas as pd
+import re
 from scipy import stats
 from sklearn.impute import KNNImputer
 from statsmodels.sandbox.stats.multicomp import multipletests
+from typing import List, Optional, Pattern, Union, Any
 
 from .peak import PeakFrame
 from .plot import Plot
-from . import mz
 
-_id_pattern_ = {'kegg': r'(C\d{5})',
+_id_pattern_ = {'zid' : r"[MK]\d{4}", 
+                'kegg': r'(C\d{5})',
                 'hmdb': r'(HMDB\d{7})'}
+
+
+def _extract_first_match(index: List[Optional[str]],
+                        pattern: Union[str, Pattern],
+                        NA: Any = None) -> List[Optional[str]]:
+    """
+    使用正则表达式提取每个字符串的第一个匹配子串。
+    - index: 字符串列表（元素也可为 None）
+    - pattern: 正则字符串或已编译的正则对象
+    - NA: 无匹配时填充值（默认 None）
+
+    返回与 index 等长的列表：匹配到的子串或 NA。
+    """
+    # 编译正则（如果传入的是字符串）
+    if pattern == 'zid':
+        pattern == _id_pattern_['zid']
+    elif pattern == 'kegg':
+        pattern = _id_pattern_['kegg']
+    elif pattern == 'hmdb':
+        pattern = _id_pattern_['hmdb']
+
+    regex = re.compile(pattern) if isinstance(pattern, str) else pattern
+
+    result: List[Optional[str]] = []
+    for s in index:
+        if s is None:
+            result.append(NA)
+            continue
+        m = regex.search(s)
+        if not m:
+            result.append(NA)
+            continue
+        # 如果正则包含捕获组，返回第一个有内容的组；否则返回整体匹配
+        if m.lastindex:  # 存在捕获组
+            # 优先返回第1个捕获组，若为空则回退到整体匹配
+            grp1 = m.group(1)
+            result.append(grp1 if grp1 is not None and grp1 != "" else m.group(0))
+        else:
+            result.append(m.group(0))
+    return result
 
 mzplt = Plot()
 
@@ -32,7 +71,7 @@ class Metab(pd.DataFrame):
     
     def drop_duplicated_ms(self, 
                            mz_on='Average Mz',
-                           ms_on='msms',
+                           ms_on='MS/MS spectrum',
                            tol=(0.003, 0.005),
                            similarity=0.99,
                            keep_first_on = 'S/N average',
@@ -72,20 +111,16 @@ class Metab(pd.DataFrame):
     def drop_null_msms(self):
         df = self.copy()    
         df = df[df[('_', 'MS/MS spectrum')].notnull()].reset_index(drop=True)
-        df[('_', 'msms')] = df[('_', 'MS/MS spectrum')].apply(parse_ms_data_to_array)
-        df.drop(columns=('_', 'MS/MS spectrum'), inplace=True)
-
         return df
 
 
     def extract_id(self,
                    target = 'kegg',
-                   col_name = ('_', 'Metabolite name'),                   
+                   metabo_name_on = ('_', 'Metabolite name'),                   
                    as_index = False):
         if target not in _id_pattern_.keys():
             raise ValueError('target must be one of %s'%(_id_pattern_.keys()))
-        ids = self[col_name].str.extract(_id_pattern_[target], expand=True)[0]
-        ids.name = target + '_id'
+        ids = _extract_first_match(self[metabo_name_on], pattern=target)
         if as_index:
             self.index = ids
         else:
@@ -113,21 +148,7 @@ class Metab(pd.DataFrame):
         # df.loc[:, groups] = df.loc[:, groups].apply(pd.to_numeric, errors='coerce')
 
         return df
-    
-    def gather_metabolites(self, total_score=1.0, keep_first_by='S/N average'):
-        '''  
-        drop off unknown ions ans drop duplicated metabolites.
-        param:
-            total_score, cutoff value for total score
-        '''
-        df = self[self[('_', 'MS/MS matched')]].copy()
-        df = df[df[('_', 'Total score')] > total_score]
-        df = df.sort_values(by=('_', keep_first_by), ascending=False)
-        df = df.drop_duplicates(subset=[('_', 'INCHIKEY')])
-        df.index = df[('_', 'Metabolite name')].str.split(';', expand=True)[0].to_list()
-        # 没有处理零值问题
-        return df
-    
+       
     def get_factor(self, groups):
         cols_0 = self.columns.get_level_values(0)
         out_idx = set(groups) - set(cols_0)
@@ -414,7 +435,7 @@ class Metab(pd.DataFrame):
 
         pls_da = PLSRegression(n_components=2)
         X_plsda = pls_da.fit_transform(X_std, y_std)[0]
-        lr = LogisticRegression(multi_class='ovr', random_state=1, solver='lbfgs')
+        lr = LogisticRegression(random_state=1, solver='lbfgs')
         lr = lr.fit(X_plsda, y_std)
         # 绘制决策区域
         mzplt.decision_regions(X_plsda, y_std, labels, classifier=lr, cmap=palette,save_to=save_to)
@@ -470,7 +491,7 @@ class Metab(pd.DataFrame):
            metabo_info_on=['Average Rt(min)', 'Average Mz', 'Metabolite name',
                           'Adduct type',  'Formula',         'Ontology',    'INCHIKEY',
                            'SMILES',      'Total score'],
-           ms_on = 'msms',
+           ms_on = 'MS/MS spectrum',
            palette = 'Set1',
            save_fig_to=None):
         '''calculate g1/g2
@@ -535,7 +556,19 @@ class Metab(pd.DataFrame):
                                save_to=save_fig_to)
         return PeakFrame(df), plot    
     
-
+    def wash(self, total_score=1.0, keep_first_by='Fill %', sort_values_by='Average Rt(min)'):
+        '''  
+        drop off unknown ions ans drop duplicated metabolites.
+        param:
+            total_score, cutoff value for total score
+        '''
+        df = self[self[('_', 'MS/MS matched')]].copy()
+        df = df[df[('_', 'Total score')] > total_score]
+        df.sort_values(by=('_', keep_first_by), ascending=False, inplace=True)
+        df.drop_duplicates(subset=[('_', 'INCHIKEY')], inplace=True)
+        df.sort_values(by=('_', sort_values_by), ascending=True, inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        return df
 
 
 def parse_ms_data_to_array(ms_string):  
@@ -555,10 +588,9 @@ def parse_ms_data_to_array(ms_string):
     ])  
     
     return ms_array  
-
     
 
-def read_msd_ali(fpath:str, drop_null_ms=True, drop_duplicated_metablites=False):
+def read_msd_ali(fpath:str, drop_null_ms=True):
     '''
     fpath: file path of MSdial-exported txt file 
     '''
@@ -577,12 +609,7 @@ def read_msd_ali(fpath:str, drop_null_ms=True, drop_duplicated_metablites=False)
     if drop_null_ms:
         df = df.drop_null_msms()
 
-    if drop_duplicated_metablites:
-        df = df.gather_metabolites()
-        # 提取kid, 依赖于本地库中代谢物名的记录规范
-        df[('_', 'kid')] = df[('_', 'Metabolite name')].str.split('|').str[0]
     return df.reset_index(drop=True)
-
 
 
 def read_sample_info(file_path, comment='#', encoding='utf-8'):  
