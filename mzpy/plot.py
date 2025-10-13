@@ -10,6 +10,7 @@ import pandas as pd
 from plotnine import *
 import seaborn as sns
 from sklearn.decomposition import PCA
+from sklearn.linear_model import LinearRegression
 
 class Plot():
     def __init__(self, base_theme = None,
@@ -251,140 +252,111 @@ class Plot():
 
     def pca(self, data, groups: list = None, labels: list = None,
             palette='Set2',
-            draw_ellipse: bool = True,
-            min_samples_for_ellipse: int = 4, # 如果样本数太少，比如3个样本，plotnine不会绘制椭圆
+            # 决定区域参数（保留）
+            draw_decision_regions: bool = True,
+            grid_step: float = 0.1,
+            region_alpha: float = 0.15,
             save_to: str = None):
         '''
-        data, a matrix, rows are samples, columns are features (genes, proteins, or metabolites)        
-        '''
+        data: matrix-like, rows are samples, columns are features (genes, proteins, or metabolites)
 
-        pca = PCA(n_components=2).fit(data)        
-        df = pd.DataFrame(pca.transform(data), columns=['PC1', 'PC2'])
-        df['group'] = pd.Categorical(groups)
-        
-        plot = (ggplot(df, aes('PC1', 'PC2', fill='group'))+
-                geom_point(alpha = 0.6, size = 3, shape = 'o', stroke = 0)+            
-                labs(x = "PC1: %.1f %%"%(100*pca.explained_variance_ratio_[0]),
-                    y = "PC2: %.1f %%"%(100*pca.explained_variance_ratio_[1]))+
-                scale_fill_brewer(type='qualitative', palette=palette)+
-                self.theme
+        决定区域绘制方法（借鉴 mixOmics）：
+        - 在 PCA 的二维空间 (PC1, PC2) 上，对 Y 的 one-hot 进行线性回归，得到每类的线性打分 f_k(x)。
+        - 决策为 argmax_k f_k(x)，两类边界由 f_i(x)=f_j(x) 给出（线性）。
+        '''
+        # 1) PCA 降维
+        pca_model = PCA(n_components=2).fit(data)
+        X_pca = pca_model.transform(data)
+        df = pd.DataFrame(X_pca, columns=['PC1', 'PC2'])
+
+        if groups is not None:
+            y_cat = pd.Categorical(groups)
+            df['group'] = y_cat
+        else:
+            # 无分组时仍允许画散点但无需决策区域
+            df['group'] = pd.Categorical(["Group"] * len(df))
+            y_cat = None
+
+        # 2) 基础图层（先不加点，便于把背景放底层）
+        plot = (
+            ggplot(df, aes('PC1', 'PC2', fill='group')) +
+            labs(
+                x="PC1: %.1f %%" % (100 * pca_model.explained_variance_ratio_[0]),
+                y="PC2: %.1f %%" % (100 * pca_model.explained_variance_ratio_[1])
+            ) +
+            scale_fill_brewer(type='qualitative', palette=palette) +
+            self.theme
         )
-        
-        # 检查是否绘制椭圆
-        if draw_ellipse and groups is not None:
-            # 检查每个分组的样本数量
-            group_counts = pd.Series(groups).value_counts()
-            min_count = group_counts.min()
-            
-            if min_count >= min_samples_for_ellipse:
-                plot = plot + stat_ellipse(geom="polygon", level=0.95, alpha=0.2)
+
+        # 3) 决定区域（mixOmics 风格：线性打分 + argmax）
+        decision_layer = None
+        if draw_decision_regions and (y_cat is not None):
+            classes = list(y_cat.categories)
+            n_classes = len(classes)
+
+            # 至少两类且样本数 >= 类别数，才进行拟合
+            if n_classes >= 2 and len(df) >= n_classes:
+                # 特征
+                X2 = df[['PC1', 'PC2']].values  # (n_samples, 2)
+
+                # one-hot 编码 Y
+                Y = pd.get_dummies(y_cat, drop_first=False).values  # (n_samples, n_classes)
+
+                # 多输出线性回归：X2 -> Y
+                reg = LinearRegression()
+                reg.fit(X2, Y)
+                # W: (2, n_classes), b: (n_classes,)
+                W = reg.coef_.T
+                b = reg.intercept_
+
+                # 构造网格（覆盖点范围，稍加 padding）
+                x_min, x_max = df['PC1'].min(), df['PC1'].max()
+                y_min, y_max = df['PC2'].min(), df['PC2'].max()
+                pad_x = 0.05 * (x_max - x_min if x_max > x_min else 1.0)
+                pad_y = 0.05 * (y_max - y_min if y_max > y_min else 1.0)
+                x_min, x_max = x_min - pad_x, x_max + pad_x
+                y_min, y_max = y_min - pad_y, y_max + pad_y
+
+                xx, yy = np.meshgrid(
+                    np.arange(x_min, x_max, grid_step),
+                    np.arange(y_min, y_max, grid_step)
+                )
+                grid_points = np.c_[xx.ravel(), yy.ravel()]  # (n_grid, 2)
+
+                # 线性打分并取 argmax
+                scores = grid_points @ W + b
+                idx = np.argmax(scores, axis=1)
+                pred_labels = [classes[i] for i in idx]
+
+                grid_df = pd.DataFrame({
+                    'PC1': xx.ravel(),
+                    'PC2': yy.ravel(),
+                    'group': pd.Categorical(pred_labels, categories=classes)
+                })
+
+                decision_layer = geom_tile(
+                    data=grid_df,
+                    mapping=aes(x='PC1', y='PC2', fill='group'),
+                    alpha=region_alpha
+                )
             else:
-                info = f'Warning: Minimum number of samples per group is {min_count}, '
-                info = info + f'less than {min_samples_for_ellipse}, skip drawing the ellipse'
-                print(info)
-        
+                print("Info: Not drawing decision regions (need at least 2 classes and enough samples).")
+
+        if decision_layer is not None:
+            plot = plot + decision_layer
+
+        # 4) 散点层（置于最上方）
+        plot = plot + geom_point(alpha=0.6, size=3, shape='o', stroke=0)
+
+        # 5) 标签（若提供）
         if labels is not None:
             df['label'] = labels
             plot = plot + geom_text(label=df.label, nudge_x=0.1, nudge_y=0.1,
-                            size = self.fontsize*0.6)
+                                    size=self.fontsize * 0.6)
+
         if save_to:
             plot.save(save_to, transparent=True)
         return plot
-    
-    def pca_sns(self, data, groups: list = None, labels: list = None,
-                palette='Set2',
-                draw_ellipse: bool = True,
-                min_samples_for_ellipse: int = 3,
-                save_to: str = None):
-        '''
-        data, a matrix, rows are samples, columns are features (genes, proteins, or metabolites)
-        pca函数使用plotnine绘图，当样本数低于4时，无法绘制置信椭圆
-        本函数采用sns绘图，手动添加上置信椭圆图，即使样本数低于4，也可绘制椭圆图
-        
-        '''
-        
-        from matplotlib.patches import Ellipse
-        from scipy.stats import chi2
-
-        # 1) PCA分析
-        pca = PCA(n_components=2, random_state=42)
-        scores = pca.fit_transform(data)  # 假设 data 是特征矩阵
-
-        # 2) 组装 DataFrame 以便按组绘图
-        df = pd.DataFrame(scores, columns=["PC1", "PC2"])
-        if groups is not None:
-            df["condition"] = groups
-        else:
-            df["condition"] = labels
-
-        expl = pca.explained_variance_ratio_  # PC1和PC2的解释度
-        print(f'Interpretability: {expl}')
-
-        # 3) 置信椭圆函数
-        def plot_confidence_ellipse(data2d, ax, edgecolor="black", facecolor=None,
-                                    alpha=0.15, linewidth=1.0, z=0.95):
-            if data2d.shape[0] < 2:
-                return
-            cov = np.cov(data2d, rowvar=False)
-            mean = data2d.mean(axis=0)
-
-            # 特征分解获取主轴与方差
-            vals, vecs = np.linalg.eigh(cov)
-            order = vals.argsort()[::-1]
-            vals, vecs = vals[order], vecs[:, order]
-
-            # 椭圆旋转角度（度）
-            theta = np.degrees(np.arctan2(vecs[1, 0], vecs[0, 0]))
-
-            # 2维卡方阈值：sqrt(chi2.ppf(z, df=2))
-            chi2_val = chi2.ppf(z, df=2)
-            width, height = 2 * np.sqrt(vals * chi2_val)  # 直径 = 2×半轴
-
-            ell = Ellipse(
-                xy=mean, width=width, height=height, angle=theta,
-                edgecolor=edgecolor, facecolor=facecolor if facecolor is not None else edgecolor,
-                alpha=alpha, linewidth=linewidth
-            )
-            ax.add_patch(ell)
-
-        # 4) 绘图
-        plt.figure(figsize=(4, 4), dpi=140)
-        ax = plt.gca()
-
-        palette = sns.color_palette(palette, n_colors=df["condition"].nunique())
-        sns.scatterplot(
-            data=df, x="PC1", y="PC2", hue="condition",
-            s=30, edgecolor="white", linewidth=1.0, palette=palette, ax=ax
-        )
-
-        # 为每个分组叠加置信椭圆
-        color_map = dict(zip(df["condition"].unique(), palette))
-        for g in df["condition"].unique():
-            sub = df[df["condition"] == g][["PC1", "PC2"]].values
-            if len(sub) >= min_samples_for_ellipse and draw_ellipse:  # 检查条件
-                plot_confidence_ellipse(sub, ax, edgecolor=color_map[g], facecolor=color_map[g], z=0.95)
-
-        x_min, x_max = ax.get_xlim()
-        y_min, y_max = ax.get_ylim()
-
-        pad_x = 0.2 * (x_max - x_min)  # 20% 外边距
-        pad_y = 0.2 * (y_max - y_min)
-
-        ax.set_xlim(x_min - pad_x, x_max + pad_x)
-        ax.set_ylim(y_min - pad_y, y_max + pad_y)
-
-        ax.set_xlabel(f"PC1 ({expl[0] * 100:.1f}%)")
-        ax.set_ylabel(f"PC2 ({expl[1] * 100:.1f}%)")
-        ax.set_title("PCA with 95% Confidence Ellipses")
-
-        plt.legend(title="Condition", frameon=False)
-        plt.tight_layout()
-
-        # 保存图像
-        if save_to is not None:
-            plt.savefig(save_to)
-        
-        plt.show()
     
     
 
