@@ -230,7 +230,52 @@ class Metab(pd.DataFrame):
         if not groups:
             groups = self.groups
         return self[groups]
-    
+
+    def plsda(self, groups:list=None, palette='Set1', save_to:str=None):
+        # 准备数据
+        from sklearn.cross_decomposition import PLSRegression
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.preprocessing import StandardScaler
+        if groups is None:
+            groups = self.groups
+        ft = self[groups]
+        X = ft.T.values
+        y = ft.columns.get_level_values(level=0).values
+        y_std, labels = pd.factorize(y)
+
+        # 数据预处理
+        scaler = StandardScaler()
+        X_std = scaler.fit_transform(X)
+
+        pls_da = PLSRegression(n_components=2)
+        X_plsda = pls_da.fit_transform(X_std, y_std)[0]
+        lr = LogisticRegression(random_state=1, solver='lbfgs')
+        lr = lr.fit(X_plsda, y_std)
+        # 绘制决策区域
+        mzplt.decision_regions(X_plsda, y_std, labels, classifier=lr, cmap=palette,save_to=save_to)
+
+        # 获取模型的加载向量
+        loading_vectors = pls_da.x_weights_
+
+        # 计算每个变量在每个主成分上的贡献度
+        contributions = np.sum(loading_vectors**2, axis=1)
+
+        # 计算 VIP 值
+        t = pls_da.x_scores_
+        w = pls_da.x_weights_
+        q = pls_da.y_loadings_
+
+        p, h = w.shape
+        vips = np.zeros((p,))
+
+        s = np.diag(t.T @ t @ q.T @ q).reshape(h, -1)
+        total_s = np.sum(s)
+
+        for i in range(p):
+            weight = np.array([w[i, j] ** 2 * s[j] for j in range(h)])
+            vips[i] = np.sqrt(p * np.sum(weight) / total_s)
+        return vips
+
     def quantum_melt(self, id_vars, groups, value_name='peak area'):
         '''
         定量表改为长表，转后成长表后根据id注释代谢物的名称会更方便
@@ -328,17 +373,17 @@ class Metab(pd.DataFrame):
             else:
                 df.loc[i, 'monot'] = 'no'
 
-        return df, mzplt.volcano(df,
-                                 x = 'corr',
-                                 y = '-log_pval',
-                                 fill = 'monot',
-                                 title = 'Spearman test',
-                                 xlab = r'$r_s$',
-                                 ylab = r'-$\log_{10}(\mathrm{p\text{-}value})$',
-                                 xcut = corr_thd,
-                                 ycut = -np.log10(p_thd),
-                                 save_to=save_to)
-
+        plot = mzplt.volcano(df,
+                             x = 'corr',
+                             y = '-log_pval',
+                             fill = 'monot',
+                             title = 'Spearman test',
+                             xlab = r'$r_s$',
+                             ylab = r'-$\log_{10}(\mathrm{p\text{-}value})$',
+                             xcut = corr_thd,
+                             ycut = -np.log10(p_thd),
+                             save_to=save_to)
+        return df, plot
 
     def trio(self, vs1, vs2,
             pattern:str,
@@ -416,53 +461,6 @@ class Metab(pd.DataFrame):
                 'vs1_plot': p1,
                 'vs2_plot': p2,
                 'venn': p_venn}
-
-    def plsda(self, groups:list=None,palette='Set1', save_to:str=None):
-        # 准备数据
-        from sklearn.cross_decomposition import PLSRegression
-        from sklearn.linear_model import LogisticRegression
-        from sklearn.preprocessing import StandardScaler
-        if groups is None:
-            groups = self.groups
-        ft = self[groups]
-        X = ft.T.values
-        y = ft.columns.get_level_values(level=0).values
-        y_std, labels = pd.factorize(y)
-
-        # 数据预处理
-        scaler = StandardScaler()
-        X_std = scaler.fit_transform(X)
-
-        pls_da = PLSRegression(n_components=2)
-        X_plsda = pls_da.fit_transform(X_std, y_std)[0]
-        lr = LogisticRegression(random_state=1, solver='lbfgs')
-        lr = lr.fit(X_plsda, y_std)
-        # 绘制决策区域
-        mzplt.decision_regions(X_plsda, y_std, labels, classifier=lr, cmap=palette,save_to=save_to)
-
-        # 获取模型的加载向量
-        loading_vectors = pls_da.x_weights_
-
-        # 计算每个变量在每个主成分上的贡献度
-        contributions = np.sum(loading_vectors**2, axis=1)
-
-        # 计算 VIP 值
-        t = pls_da.x_scores_
-        w = pls_da.x_weights_
-        q = pls_da.y_loadings_
-
-        p, h = w.shape
-        vips = np.zeros((p,))
-
-        s = np.diag(t.T @ t @ q.T @ q).reshape(h, -1)
-        total_s = np.sum(s)
-
-        for i in range(p):
-            weight = np.array([w[i, j] ** 2 * s[j] for j in range(h)])
-            vips[i] = np.sqrt(p * np.sum(weight) / total_s)
-        return vips
-    
-
         
     def ttest(self, g1, g2, fdr_corr=True):
         _, pval = stats.ttest_ind(self[g1].values, self[g2].values, axis = 1) 

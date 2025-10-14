@@ -225,142 +225,61 @@ class Plot():
                     self.theme)
         if save_to is not None:
             plot.save(save_to, transparent=True)
-        return plot
-    
+        return plot    
 
-    # def pca(self, data, groups:list = None, labels:list = None,
-    #         palette='Set1',
-    #         save_to:str = None):
-    #     pca = PCA(n_components=2).fit(data)        
-    #     df = pd.DataFrame(pca.transform(data), columns=['PC1', 'PC2'])
-    #     df['group'] = pd.Categorical(groups)
-    #     plot = (ggplot(df, aes('PC1', 'PC2', fill='group'))+
-    #             geom_point(alpha = 0.6, size = 3, shape = 'o', stroke = 0)+            
-    #             stat_ellipse(geom="polygon", level=0.95, alpha=0.2)+
-    #             labs(x = "PC1: %.1f %%"%(100*pca.explained_variance_ratio_[0]),
-    #                 y = "PC2: %.1f %%"%(100*pca.explained_variance_ratio_[1]))+
-    #             scale_fill_brewer(type='qualitative', palette=palette)+
-    #             self.theme
-    #     )
-    #     if labels is not None:
-    #         df['label'] = labels
-    #         plot = plot + geom_text(label=df.label, nudge_x=0.1, nudge_y=0.1,
-    #                           size = self.fontsize*0.6)
-    #     if save_to:
-    #         plot.save(save_to, transparent=True)
-    #     return plot
-
-    def pca(self, data, groups: list = None, labels: list = None,
-            palette='Set2',
-            # 决定区域参数（保留）
-            draw_decision_regions: bool = True,
-            grid_step: float = 0.1,
-            region_alpha: float = 0.15,
+    def pca(self, 
+            data, 
+            groups: list = None, 
+            labels: list = None,
+            palette: str = 'Set2',
+            add_ellipse: bool = True,
             save_to: str = None):
         '''
-        data: matrix-like, rows are samples, columns are features (genes, proteins, or metabolites)
-
-        决定区域绘制方法（借鉴 mixOmics）：
-        - 在 PCA 的二维空间 (PC1, PC2) 上，对 Y 的 one-hot 进行线性回归，得到每类的线性打分 f_k(x)。
-        - 决策为 argmax_k f_k(x)，两类边界由 f_i(x)=f_j(x) 给出（线性）。
+        data, matrix-like, rows are samples, columns are features
+        add_ellipse, True to plot the 95% confidence ellipse
         '''
         # 1) PCA 降维
         pca_model = PCA(n_components=2).fit(data)
         X_pca = pca_model.transform(data)
         df = pd.DataFrame(X_pca, columns=['PC1', 'PC2'])
 
+        # 2) 处理分组信息
         if groups is not None:
             y_cat = pd.Categorical(groups)
             df['group'] = y_cat
         else:
-            # 无分组时仍允许画散点但无需决策区域
             df['group'] = pd.Categorical(["Group"] * len(df))
-            y_cat = None
 
-        # 2) 基础图层（先不加点，便于把背景放底层）
+        # 3) 基础 ggplot 图层
         plot = (
             ggplot(df, aes('PC1', 'PC2', fill='group')) +
             labs(
-                x="PC1: %.1f %%" % (100 * pca_model.explained_variance_ratio_[0]),
-                y="PC2: %.1f %%" % (100 * pca_model.explained_variance_ratio_[1])
+                x=f"PC1: {100 * pca_model.explained_variance_ratio_[0]:.1f} %",
+                y=f"PC2: {100 * pca_model.explained_variance_ratio_[1]:.1f} %"
             ) +
             scale_fill_brewer(type='qualitative', palette=palette) +
             self.theme
         )
 
-        # 3) 决定区域（mixOmics 风格：线性打分 + argmax）
-        decision_layer = None
-        if draw_decision_regions and (y_cat is not None):
-            classes = list(y_cat.categories)
-            n_classes = len(classes)
+        # 4) 如果需要，添加置信椭圆
+        if add_ellipse:
+            plot = plot + stat_ellipse(geom="polygon", level=0.95, alpha=0.2)
 
-            # 至少两类且样本数 >= 类别数，才进行拟合
-            if n_classes >= 2 and len(df) >= n_classes:
-                # 特征
-                X2 = df[['PC1', 'PC2']].values  # (n_samples, 2)
-
-                # one-hot 编码 Y
-                Y = pd.get_dummies(y_cat, drop_first=False).values  # (n_samples, n_classes)
-
-                # 多输出线性回归：X2 -> Y
-                reg = LinearRegression()
-                reg.fit(X2, Y)
-                # W: (2, n_classes), b: (n_classes,)
-                W = reg.coef_.T
-                b = reg.intercept_
-
-                # 构造网格（覆盖点范围，稍加 padding）
-                x_min, x_max = df['PC1'].min(), df['PC1'].max()
-                y_min, y_max = df['PC2'].min(), df['PC2'].max()
-                pad_x = 0.05 * (x_max - x_min if x_max > x_min else 1.0)
-                pad_y = 0.05 * (y_max - y_min if y_max > y_min else 1.0)
-                x_min, x_max = x_min - pad_x, x_max + pad_x
-                y_min, y_max = y_min - pad_y, y_max + pad_y
-
-                xx, yy = np.meshgrid(
-                    np.arange(x_min, x_max, grid_step),
-                    np.arange(y_min, y_max, grid_step)
-                )
-                grid_points = np.c_[xx.ravel(), yy.ravel()]  # (n_grid, 2)
-
-                # 线性打分并取 argmax
-                scores = grid_points @ W + b
-                idx = np.argmax(scores, axis=1)
-                pred_labels = [classes[i] for i in idx]
-
-                grid_df = pd.DataFrame({
-                    'PC1': xx.ravel(),
-                    'PC2': yy.ravel(),
-                    'group': pd.Categorical(pred_labels, categories=classes)
-                })
-
-                decision_layer = geom_tile(
-                    data=grid_df,
-                    mapping=aes(x='PC1', y='PC2', fill='group'),
-                    alpha=region_alpha
-                )
-            else:
-                print("Info: Not drawing decision regions (need at least 2 classes and enough samples).")
-
-        if decision_layer is not None:
-            plot = plot + decision_layer
-
-        # 4) 散点层（置于最上方）
+        # 5) 散点层
         plot = plot + geom_point(alpha=0.6, size=3, shape='o', stroke=0)
 
-        # 5) 标签（若提供）
+        # 6) 标签层（若提供）
         if labels is not None:
             df['label'] = labels
             plot = plot + geom_text(label=df.label, nudge_x=0.1, nudge_y=0.1,
                                     size=self.fontsize * 0.6)
 
+        # 7) 保存或返回
         if save_to:
             plot.save(save_to, transparent=True)
-        return plot
-    
-    
+        return plot    
 
-    def plsda_plt(self, T_scores, y, save_to=None):
+    def plsda_plt(self, T_scores, y, palette='Set2', save_to=None):
         """
         绘制 PLS 结果和决策区域并可选择保存图像。
         
@@ -405,7 +324,7 @@ class Plot():
         # 4) 绘图
         plt.figure(figsize=(4, 4), dpi=140)
         ax = plt.gca()
-        palette = sns.color_palette("Set2", n_colors=len(class_names))
+        palette = sns.color_palette(palette, n_colors=len(class_names))
         palette_map = {c: col for c, col in zip(class_names, palette)}
 
         # 决策区域底图（使用较浅的颜色）
