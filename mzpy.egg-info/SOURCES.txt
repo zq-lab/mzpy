@@ -7,7 +7,6 @@ mzpy/fragmentation.py
 mzpy/metab.py
 mzpy/ms.py
 mzpy/mz.py
-mzpy/omics.py
 mzpy/peak.py
 mzpy/plot.py
 mzpy/precursortype.py
