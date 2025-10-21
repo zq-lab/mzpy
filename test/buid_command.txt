@@ -1,2 +1,2 @@
 python -m build --wheel
-twine upload dist/*
+twine upload dist\mzpy-

@@ -1,4 +1,4 @@
-__version__ = '0.4'
+__version__ = '0.5.1'
 
 def main():
     print("mzpy core CLI is working.")

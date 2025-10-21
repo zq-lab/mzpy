@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mzpy"
-version = "0.4"
+version = "0.5.1"
 description = "A pandas-like toolkit for MS data handling"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
@@ -12,7 +12,7 @@ authors = [{ name = "zq-lab", email = "zhangq@nwsuaf.edu.cn" }]
 dependencies = [
     "igraph>=0.11.4",
     "numba>=0.57.1",
-    "numpy>=1.24.2",
+    "numpy>=2.0",
     "pandas>=2.2.1",
     "plotnine>=0.14.5",
     "pycairo>=1.28.0",

@@ -288,7 +288,7 @@ class PeakFrame(pd.DataFrame):
         returns:
             mzfram containing matched results.
         '''
-        from .precursorType import load_precursors
+        from .precursortype import load_precursors
         from . import mz
         df = self.copy()
         df['Num Peaks'] = df['Num Peaks'].astype(int)
@@ -533,7 +533,10 @@ class PeakFrame(pd.DataFrame):
 
         return df[ordered_cols]
 
-    def to_msp_block(self, MSMS_on: str = "MSMS", MSMS_sep: str = "\t") -> str:
+    def to_msp_block(self,
+                     MSMS_on: str = "MSMS",
+                     npeaks_on: str='Num Peaks',
+                     MSMS_sep: str = "\t") -> str:
         """
         将 DataFrame 转换为格式化文本，针对严格的 MSMS 数据结构（二维列表/数组，每行2列）。
 
@@ -551,8 +554,7 @@ class PeakFrame(pd.DataFrame):
         - str: 格式化后的文本
         """
         # 按当前 DataFrame 列顺序，排除 MSMS 列
-        normal_cols = [c for c in self.columns if c != MSMS_on]
-        has_msms = MSMS_on in self.columns
+        normal_cols = [c for c in self.columns if c not in (MSMS_on, npeaks_on) ]
 
         out_lines = []
         append = out_lines.append  # 局部绑定以加速循环
@@ -560,17 +562,17 @@ class PeakFrame(pd.DataFrame):
         for _, row in self.iterrows():
             # 1) 非 MSMS 列
             for c in normal_cols:
-                val = row[c]
-                if pd.isna(val):
-                    append(f"{c}:")
-                else:
-                    append(f"{c}:{val}")
+                append(f"{c}:{ row[c]}")                   
 
             # 2) MSMS 列（严格二维列表，每行2列）
-            if has_msms:
-                msms_list = row[MSMS_on]  # [[mz, intensity], ...]
-                for mz, intensity in msms_list:
-                    append(f"{mz}{MSMS_sep}{intensity}")
+            if  MSMS_on in self.columns:
+                msms_list = np.asarray(row[MSMS_on])  # [[mz, intensity], ...]
+                if (msms_list is None) or (msms_list.size == 0):
+                    append('Num Peaks:0')
+                else:
+                    append(f'Num Peaks:{len(msms_list)}')
+                    for mz, intensity in msms_list:
+                        append(f"{mz}{MSMS_sep}{intensity}")
             append('') # 每条记录以空行分隔
 
         return "\n".join(out_lines)
@@ -580,6 +582,7 @@ class PeakFrame(pd.DataFrame):
                standardized: bool = False,
                mode='w',
                MSMS_on: str = "MSMS",
+               npeaks_on='Num Peaks',
                MSMS_sep: str = "\t",
                chunk_size: int = 5000,
                encoding='utf-8'):
@@ -626,11 +629,10 @@ class PeakFrame(pd.DataFrame):
                 end = min(start + chunk_size, total)
                 # 注意：这里基于 df_to_write 的切片调用 to_msp_block
                 block_text = df_to_write.iloc[start:end].to_msp_block(MSMS_on=MSMS_on,
+                                                                      npeaks_on=npeaks_on,
                                                                       MSMS_sep=MSMS_sep)
 
-                if block_text and not block_text.endswith("\n"):
-                    block_text += "\n"
-
+                block_text = block_text.rstrip('\n') + '\n\n'
                 f.write(block_text)
 
     def to_pickle(self, path, MSMS_on='MSMS', to_msms_str=False, *args, **kwargs):
