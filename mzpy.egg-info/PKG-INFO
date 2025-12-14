@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: mzpy
-Version: 0.5.1
+Version: 0.6.0
 Summary: A pandas-like toolkit for MS data handling
 Author-email: zq-lab <zhangq@nwsuaf.edu.cn>
 Requires-Python: >=3.11

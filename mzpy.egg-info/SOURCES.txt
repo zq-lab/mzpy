@@ -3,6 +3,7 @@ README.md
 pyproject.toml
 mzpy/__init__.py
 mzpy/enrichment.py
+mzpy/formula.py
 mzpy/fragmentation.py
 mzpy/metab.py
 mzpy/ms.py

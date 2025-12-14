@@ -232,12 +232,12 @@ class Metab(pd.DataFrame):
         return self[groups]
 
     def plsda(self, groups:list=None, palette='Set1', save_to:str=None):
-        # 准备数据
         from sklearn.cross_decomposition import PLSRegression
-        from sklearn.linear_model import LogisticRegression
         from sklearn.preprocessing import StandardScaler
+
         if groups is None:
             groups = self.groups
+
         ft = self[groups]
         X = ft.T.values
         y = ft.columns.get_level_values(level=0).values
@@ -248,19 +248,15 @@ class Metab(pd.DataFrame):
         X_std = scaler.fit_transform(X)
 
         pls_da = PLSRegression(n_components=2)
+        # 只取 X 方向的 scores
         X_plsda = pls_da.fit_transform(X_std, y_std)[0]
-        lr = LogisticRegression(random_state=1, solver='lbfgs')
-        lr = lr.fit(X_plsda, y_std)
-        # 绘制决策区域
-        mzplt.decision_regions(X_plsda, y_std, labels, classifier=lr, cmap=palette,save_to=save_to)
 
-        # 获取模型的加载向量
+        # 使用 Plot.plsda_plt 来画图
+        mzplt.plsda_plt(T_scores=X_plsda, y=y_std, palette=palette, save_to=save_to)
+
+        # 下面 VIP 计算代码保持不变
         loading_vectors = pls_da.x_weights_
 
-        # 计算每个变量在每个主成分上的贡献度
-        contributions = np.sum(loading_vectors**2, axis=1)
-
-        # 计算 VIP 值
         t = pls_da.x_scores_
         w = pls_da.x_weights_
         q = pls_da.y_loadings_
@@ -384,11 +380,42 @@ class Metab(pd.DataFrame):
                              ycut = -np.log10(p_thd),
                              save_to=save_to)
         return df, plot
+    
+    def to_long_df(self, groups=None, index=None, select=None):
+        '''
+        transfer into long dataframe.
+        '''
+        if groups is None:
+            groups = self.groups
 
+        value_df =  self[groups].copy()
+        if index:
+            value_df.index = self[('_', index)].tolist()
+
+        df_long = (
+            value_df
+            .stack(level=[0, 1], future_stack=True)
+            .reset_index()
+        )
+        df_long.columns = ['metabo', 'group', 'sample', 'value']
+
+        if select is not None:
+            if isinstance(select, (list, tuple, np.ndarray)):
+                df_long = df_long[df_long['metabo'].isin(select)]
+            else:
+                raise TypeError(f'select must be list-like type. {type(select)}')
+            
+        return df_long
+    
+    def plot_metabo_trend(self, groups=None, index=None, select=None, ncols=4, save_to=None):
+        mx = self.to_long_df(groups=groups, index=index, select=select)
+        return mzplt.box(mx, log_transform=True, ncol=ncols, save_to=save_to)
+    
     def trio(self, vs1, vs2,
             pattern:str,
+            vip_on = None,
             fc:float=1.5, p:float=0.05,
-            metabo_idx:str = None,
+            metabo_index_on:str = None,
             palette = 'Set1'):
         '''
         obtaine differential expressed metabolites (dem) form the existing vs groups (vs1 and vs2) according to
@@ -411,28 +438,21 @@ class Metab(pd.DataFrame):
             raise TypeError('Only 3 groups can be accepted.')
         if not groups <= set(self.groups):
             raise ValueError('Unknown group name. Please Check groups names in params vs1 or vs2') 
-        
-        metabo_info_on=['Average Rt(min)', 'Average Mz', 'Metabolite name',
-                'Adduct type',  'Formula',         'Ontology',    'INCHIKEY',
-                'SMILES',      'Total score']
-        
-        if metabo_idx:
-            if metabo_idx in self['_'].columns:
-                metabo_info_on.append(metabo_idx)
+              
 
-        df1, p1 = self.vs(vs1, metabo_info_on=metabo_info_on, fc=fc, p=p) 
-        df2, p2 = self.vs(vs2, metabo_info_on=metabo_info_on, fc=fc, p=p)      
+        if vip_on is not None:
+            df1, p1 = self.vs_vip(vs1, metabo_index_on=metabo_index_on, fc=fc, vip_on=vip_on) 
+            df2, p2 = self.vs_vip(vs2, metabo_index_on=metabo_index_on, fc=fc, vip_on=vip_on) 
+        else:    
+            df1, p1 = self.vs_t(vs1, metabo_index_on=metabo_index_on, fc=fc, p=p) 
+            df2, p2 = self.vs_t(vs2, metabo_index_on=metabo_index_on, fc=fc, p=p)      
       
-        if metabo_idx:
-            a = set(df1.loc[df1['regulation'] == 'up', metabo_idx].tolist())
-            b = set(df1.loc[df1['regulation'] == 'dn', metabo_idx].tolist())
-            c = set(df2.loc[df2['regulation'] == 'up', metabo_idx].tolist())
-            d = set(df2.loc[df2['regulation'] == 'dn', metabo_idx].tolist())
-        else:
-            a = set(df1.loc[df1['regulation'] == 'up'].index.tolist())
-            b = set(df1.loc[df1['regulation'] == 'dn'].index.tolist())
-            c = set(df2.loc[df2['regulation'] == 'up'].index.tolist())
-            d = set(df2.loc[df2['regulation'] == 'dn'].index.tolist())    
+
+        a = set(df1.loc[df1['trend'] == 'up', 'metabo'].tolist())
+        b = set(df1.loc[df1['trend'] == 'dn', 'metabo'].tolist())
+        c = set(df2.loc[df2['trend'] == 'up', 'metabo'].tolist())
+        d = set(df2.loc[df2['trend'] == 'dn', 'metabo'].tolist())
+  
         # gather data for venn plot
         if pattern in ('anti', 'syn'):
             data = {vs1+' up'  : a,
@@ -481,17 +501,14 @@ class Metab(pd.DataFrame):
             return multipletests(pval, method='fdr_bh')[1]
         else:
             return pval
-
-    def vs(self,
-           scheme,
-           fc:float=1.5,
-           p:float=0.05,
-           metabo_info_on=['Average Rt(min)', 'Average Mz', 'Metabolite name',
-                          'Adduct type',  'Formula',         'Ontology',    'INCHIKEY',
-                           'SMILES',      'Total score'],
-           ms_on = 'MS/MS spectrum',
-           palette = 'Set1',
-           save_fig_to=None):
+        
+    def vs_t(self,
+             scheme,
+             metabo_index_on=None,
+             fc:float=1.0,
+             p:float=0.05,
+             palette = 'Set1',
+             save_fig_to=None):
         '''calculate g1/g2
         ---------------------------------------
         Definition standard of differential metabolites：
@@ -515,59 +532,161 @@ class Metab(pd.DataFrame):
         '''
         if scheme is None or (scheme==''):
             raise ValueError(f'Unknown scheme ({scheme})! It must be 2 group names of / intervals.\n{self.groups}')
+        
+        if metabo_index_on is None:
+            metabo = self.index.tolist()
+        elif isinstance(metabo_index_on, str) and metabo_index_on in self['_'].columns:
+            metabo = self[('_', metabo_index_on)].tolist()
+        else:
+            raise KeyError(f'Error column key: {metabo_index_on}')        
+
         nume, deno = scheme.split('/')
         if nume not in self.groups:
             raise ValueError(f'{nume} is unknown group!')
         elif deno not in self.groups:
-            raise ValueError(f'{deno} is unknown group!')
+            raise ValueError(f'{deno} is unknown group!')        
 
         log2FC = self.log2FC(nume=nume, deno=deno)
-        fdr_p = self.ttest(nume, deno)
-
-        if metabo_info_on:
-            if ms_on and (ms_on in self['_'].columns):
-                # 自动续加ms列
-                metabo_info_on.append(ms_on)
-            df = self['_'][list(set(metabo_info_on))].copy()
-        else:
-            df = pd.DataFrame()        
 
 
-        df['log2FC'] = log2FC
-        df['FDR'] = fdr_p
-        df['-lg_FDR'] = -1 * np.log10(fdr_p)
-        df['regulation'] = df['log2FC'].apply(
+        # use T-test
+        fdr_p  = self.ttest(nume, deno)
+        df = pd.DataFrame({'metabo': metabo,
+                            'log2FC': log2FC,
+                            'Q_val': fdr_p})
+        df['neg_log10_qval'] = -1 * np.log10(fdr_p)
+
+        # 首先根据log2FC设置为up或者dn
+        df['trend'] = df['log2FC'].apply(
                 lambda x: 'up' if x > np.log2(fc) else (
                             'dn' if x < -np.log2(fc) else 'no')
         )
-        ## 其次，所有p值不达标的均改为no
-        df['regulation'] = df[['regulation', 'FDR']].apply(lambda row: 'no' if row['FDR'] >= p \
-                                                   else row['regulation'],
-                                                   axis=1)
-
+        ## 然后，根据p值，把不符合要求的改为no
+        df['trend'] = df[['trend', 'Q_val']].apply(lambda row: 'no' if row['Q_val'] >= p \
+                                                else row['trend'],
+                                                axis=1)
         # ploting vocano digram
-        plot = mzplt.volcano(df, x='log2FC', y='-lg_FDR', fill='regulation',
+        plot = mzplt.volcano(df, x='log2FC', y='neg_log10_qval', fill='trend',
                                xcut = np.log2(fc),
                                ycut = -np.log10(p),
                                title = f'{nume} / {deno}',
                                palette = palette,
                                save_to=save_fig_to)
-        return PeakFrame(df), plot    
-    
-    def wash(self, total_score=1.0, keep_first_by='Fill %', sort_values_by='Average Rt(min)'):
-        '''  
-        drop off unknown ions ans drop duplicated metabolites.
-        param:
-            total_score, cutoff value for total score
+        return df, plot
+
+    def vs_vip(self,
+               scheme,
+               vip_on: str | list,
+               metabo_index_on=None,
+               fc:float=1.0,
+               palette = 'Set1',
+               save_fig_to=None):
+        '''calculate g1/g2
+        ---------------------------------------
+        Definition standard of differential metabolites：
+            Metabolites, mappable to KEGG or HMDB IDs, 
+            that had a fold-change greater than +/− 1.5 
+            with an FDR adjusted p-value <0.05
+            ref: MEtabolites, 2018, https://www.mdpi.com/2218-1989/8/1/16
+        parameters:
+        -----------------
+            scheme:  calculation scheme, for example, G1/G2
+            fc, threshold value of fold change
+            p, threhold value of p-value
+            vip_on: column name of PLS-DA vip values.
+                If it is defined, p will be ignored.
+            save_to, where to save volcano plot figure            
+        return:
+        ----------------
+            return None
+            - the vocano plot will be saved if set save_to
+            - calculation results svaed into self data frame with scheme 'g1/g2'
         '''
-        df = self[self[('_', 'MS/MS matched')]].copy()
+        if scheme is None or (scheme==''):
+            raise ValueError(f'Unknown scheme ({scheme})! It must be 2 group names of / intervals.\n{self.groups}')
+        
+        if metabo_index_on is None:
+            metabo = self.index.tolist()
+        elif isinstance(metabo_index_on, str) and metabo_index_on in self['_'].columns:
+            metabo = self[('_', metabo_index_on)].tolist()
+        else:
+            raise KeyError(f'Error column key: {metabo_index_on}') 
+
+        if isinstance(vip_on, str) and vip_on in self['_'].columns:
+            vip = self[('_', vip_on)]
+        elif isinstance(vip_on, list) or (isinstance(vip_on, np.ndarray) and vip_on.ndim == 1):
+            if len(vip_on) == self.shape[0]:
+                vip = vip_on
+            else:
+                raise ValueError(f'Length (shape) of vip_on list does not match length of the data table.')
+        else:
+            raise TypeError(f'vip_on: type must be str or list')
+
+
+        nume, deno = scheme.split('/')
+        if nume not in self.groups:
+            raise ValueError(f'{nume} is unknown group!')
+        elif deno not in self.groups:
+            raise ValueError(f'{deno} is unknown group!')        
+
+        log2FC = self.log2FC(nume=nume, deno=deno)
+        df = pd.DataFrame({'metabo': metabo,
+                            'log2FC': log2FC,
+                            'vip': vip})
+
+        # 首先根据log2FC设置为up或者dn
+        df['trend'] = df['log2FC'].apply(
+                lambda x: 'up' if x > np.log2(fc) else (
+                            'dn' if x < -np.log2(fc) else 'no')
+        )
+        ## 然后，根据p值，把不符合要求的改为no
+        df['trend'] = df[['trend', 'vip']].apply(lambda row: 'no' if row['vip'] < 1 \
+                                                else row['trend'],
+                                                axis=1)
+        # ploting vocano digram
+        plot = mzplt.volcano(df, x='log2FC', y='vip', fill='trend',
+                               xcut = np.log2(fc),
+                               ycut = 1,
+                               title = f'{nume} / {deno}',
+                               palette = palette,
+                               save_to=save_fig_to)
+        return df, plot   
+    
+    def wash(self, total_score=1.0, keep_first_by='Fill %', sort_values_by='Average Rt(min)', inplace=False):
+        """  
+        Drop off unknown ions and remove duplicated metabolites.
+
+        Parameters
+        ----------
+        total_score : float, default 1.0  
+            Cutoff value for total score.
+        keep_first_by : str, default 'Fill %'  
+            Column used to determine which duplicated metabolites to keep first (descending sort).
+        sort_values_by : str, default 'Average Rt(min)'  
+            Column used to sort final DataFrame (ascending sort).
+        inplace : bool, default False  
+            If True, modify the current DataFrame in place.  
+            If False, return a cleaned copy of the DataFrame.
+        """
+        # 选择原始数据或副本
+        df = self if inplace else self.copy()
+
+        # 过滤数据
+        df = df[df[('_', 'MS/MS matched')]==True]
         df = df[df[('_', 'Total score')] > total_score]
+
+        # 按指定列排序与去重
         df.sort_values(by=('_', keep_first_by), ascending=False, inplace=True)
         df.drop_duplicates(subset=[('_', 'INCHIKEY')], inplace=True)
+        df = df[~df[('_', 'Adduct type')].str.contains("unk", case=False, na=False)]
         df.sort_values(by=('_', sort_values_by), ascending=True, inplace=True)
         df.reset_index(drop=True, inplace=True)
-        return df
 
+        # 返回结果
+        if inplace:
+            self.__init__(df)
+        else:
+            return df
 
 def parse_ms_data_to_array(ms_string):  
     """  

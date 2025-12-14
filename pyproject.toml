@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mzpy"
-version = "0.5.1"
+dynamic = ["version"]
 description = "A pandas-like toolkit for MS data handling"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
@@ -24,12 +24,11 @@ dependencies = [
     "tqdm>=4.67.1"
 ]
 
-[tool.setuptools]
-include-package-data = true
+[tool.setuptools.dynamic]
+version = { attr = "mzpy.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["."]
 
-# 如需包含包内数据文件
-[tool.setuptools.package-data]
-your_package = ["mass.csv"]
+
+

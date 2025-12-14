@@ -10,16 +10,119 @@ import pandas as pd
 from plotnine import *
 import seaborn as sns
 from sklearn.decomposition import PCA
-from sklearn.linear_model import LinearRegression
+
+
+# class Plot():
+#     def __init__(self, base_theme = None,
+#                 fontsize = 16,
+#                 figure_size = (5, 5),
+#                 dpi = 120):
+#         if base_theme == None:
+#             base_theme = theme_matplotlib()
+
+#         self.theme = (base_theme + 
+#             theme(
+#                 axis_title         = element_text(size=fontsize*1.3),
+#                 axis_text          = element_text(size=fontsize),
+#                 legend_title       = element_text(size=fontsize),
+#                 legend_text        = element_text(size=fontsize*0.85),
+#                 legend_background  = element_rect(fill=None, color=None),
+#                 legend_position    = (0.95, 0.95),
+#                 figure_size        = figure_size,
+#                 dpi                = dpi))
+        
+#         self.fontsize = fontsize
+#         self.figure_size = figure_size
+#         self.dpi = dpi
+
+#         # Nature 系列参考 https://zhuanlan.zhihu.com/p/670396774
+#         self.colors = {
+#             'Nature_1': ['#217185', '#D95319', '#FED976', '#77AC30'],
+#             'Nature_2': ['#A5AEB7', '#925EB0', '#37E99F4', '#CC7C71', '#7AB656']
+#         }
+        
+    
+#     def bubble(self, df,
+#                x:str       ='impact',
+#                y:str       = '_pFDR_',
+#                fill:str    = 'category',
+#                size:str    = '_n_match_',
+#                n_top:int   = None,
+#                palette:str = 'Dark2',
+#                save_to:str = None):
+#         # 需要注意的是，像 'tab10' 这种来自 Matplotlib 的命名通常不在原生的 ColorBrewer 范围里
+#         # 可能会出现找不到该调色板或默认回退为其他 palette 的情况。
+#         if n_top:
+#             df = df.head(n_top)
+#         n_duplicated = df.duplicated(subset=[x,y]).value_counts().get(True, 0)
+#         if n_duplicated > 0:
+#             print(f'There are {n_duplicated} data points overlapping!')
+
+#         plot = (ggplot(df, aes(x=x, y=y, size=size, fill=fill)) +
+#                 geom_point(alpha=0.45) +
+#                 scale_fill_brewer(type='qualitative', palette=palette) +
+#                 self.theme
+#         )
+#         if save_to:
+#             plot.save(save_to, transparent=True)
+#         return plot
+    
+    
+#     def decision_regions(self, X, y, labels, classifier, resolution=0.02, cmap='tab10', save_to=None):
+#         '''
+#         绘制决策区域
+#         X, feature matrix
+#         y, lable vector,correspondings to X
+#         classfier, for predict decisiong regions,in most cased, it would be an object of LogisticRegression
+#         labels, 
+#         resolution, meshgrid resolution
+#         cmap, cmap for dot of samples.
+#         '''
+#         markers = ('s', 'x', 'o', '^', 'v')
+#         colors = cm[cmap].colors
+
+#         # plot the decision surface
+#         x1_min, x1_max = X[:, 0].min() - 1, X[:, 0].max() + 1
+#         x2_min, x2_max = X[:, 1].min() - 1, X[:, 1].max() + 1
+#         xx1, xx2 = np.meshgrid(np.arange(x1_min, x1_max, resolution),
+#                             np.arange(x2_min, x2_max, resolution))
+#         Z = classifier.predict(np.array([xx1.ravel(), xx2.ravel()]).T)
+#         Z = Z.reshape(xx1.shape)
+#         plt.figure(figsize=(5, 5))
+#         plt.contourf(xx1, xx2, Z, alpha=0.4, cmap='Pastel2', antialiased=True)
+#         plt.xlim(xx1.min(), xx1.max())
+#         plt.ylim(xx2.min(), xx2.max())
+
+#         # plot samples by class
+#         for idx, cl in enumerate(np.unique(y)):
+#             plt.scatter(x=X[y == cl, 0], 
+#                         y=X[y == cl, 1],
+#                         alpha=0.8, 
+#                         color=colors[idx],
+#                         marker=markers[idx], 
+#                         label=labels[idx])
+#         plt.legend(loc='lower left')
+#         plt.tight_layout()
+#         if save_to:
+#             plt.savefig(save_to, transparent=True)
+#         plt.show()
+
+
+# import pandas as pd
+# import numpy as np
+# import seaborn as sns
+# import matplotlib.pyplot as plt
+# from plotnine import *
 
 class Plot():
-    def __init__(self, base_theme = None,
-                fontsize = 20,
-                figure_size = (5, 5),
-                dpi = 96):
-        if base_theme == None:
+    def __init__(self, base_theme=None,
+                 fontsize=20,
+                 figure_size=(5, 5),
+                 dpi=96):
+        if base_theme is None:
             base_theme = theme_matplotlib()
 
+        # Define basic theme for all ggplot objects
         self.theme = (base_theme + 
             theme(
                 axis_title         = element_text(size=fontsize*1.3),
@@ -35,78 +138,243 @@ class Plot():
         self.figure_size = figure_size
         self.dpi = dpi
 
-        # Nature 系列参考 https://zhuanlan.zhihu.com/p/670396774
+        # Predefined color palettes inspired by Nature journals
         self.colors = {
             'Nature_1': ['#217185', '#D95319', '#FED976', '#77AC30'],
-            'Nature_2': ['#A5AEB7', '#925EB0', '#37E99F4', '#CC7C71', '#7AB656']
+            'Nature_2': ['#A5AEB7', '#925EB0', '#37E99F', '#CC7C71', '#7AB656']
         }
-        
-    
-    def bubble(self, df,
-               x:str       ='impact',
-               y:str       = '_pFDR_',
-               fill:str    = 'category',
-               size:str    = '_n_match_',
-               n_top:int   = None,
-               palette:str = 'Dark2',
-               save_to:str = None):
-        # 需要注意的是，像 'tab10' 这种来自 Matplotlib 的命名通常不在原生的 ColorBrewer 范围里
-        # 可能会出现找不到该调色板或默认回退为其他 palette 的情况。
-        if n_top:
-            df = df.head(n_top)
-        n_duplicated = df.duplicated(subset=[x,y]).value_counts().get(True, 0)
-        if n_duplicated > 0:
-            print(f'There are {n_duplicated} data points overlapping!')
 
-        plot = (ggplot(df, aes(x=x, y=y, size=size, fill=fill)) +
-                geom_point(alpha=0.45) +
-                scale_fill_brewer(type='qualitative', palette=palette) +
-                self.theme
+    def bar(self, df, column, title="", na_replace="other", palette="Nature_1", save_to=None):
+        """
+        Draw a frequency bar chart (largest category on top) in a single color using plotnine.
+
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            Input DataFrame.
+        column : str
+            Column to calculate frequency.
+        title : str, optional
+            Plot title.
+        na_replace : str, default 'other'
+            Replacement value for missing data.
+        palette : str, optional
+            Color palette name ('Nature_1' or 'Nature_2').
+        save_to : str or None, default None
+            File path to save the chart.
+
+        Returns
+        -------
+        plotnine.ggplot
+            The plotnine plot object.
+        """
+        if column not in df.columns:
+            raise ValueError(f"Column '{column}' not found in DataFrame.")
+
+        # ✅ 复制 DataFrame 避免修改原数据
+        data = df.copy()
+        data[column] = data[column].fillna(na_replace).astype(str)
+
+        # ✅ 统计频率（按值升序排序，翻转后最大值在上方）
+        freq = data[column].value_counts().reset_index()
+        freq.columns = [column, "count"]
+        freq = freq.sort_values("count", ascending=True).reset_index(drop=True)
+
+        # ✅ 设置分类顺序（ordered=True 保证顺序不被打乱）
+        freq[column] = pd.Categorical(freq[column], categories=freq[column].tolist(), ordered=True)
+
+        # ✅ 使用指定色板的第一个颜色
+        if palette in self.colors:
+            color = self.colors[palette][0]
+        else:
+            color = sns.color_palette("Set2")[0]
+
+        # ✅ 绘制单色条形图
+        p = (
+            ggplot(freq, aes(x=column, y="count")) +
+            geom_col(fill=color, show_legend=False) +  # 单一颜色
+            coord_flip() +
+            labs(title=title, x=column, y="Frequency") +
+            self.theme +
+            theme(
+                axis_text_x=element_text(size=self.fontsize * 0.7),
+                axis_text_y=element_text(size=self.fontsize * 0.7)
+            )
         )
-        if save_to:
-            plot.save(save_to, transparent=True)
-        return plot
-    
-    
-    def decision_regions(self, X, y, labels, classifier, resolution=0.02, cmap='tab10', save_to=None):
-        '''
-        绘制决策区域
-        X, feature matrix
-        y, lable vector,correspondings to X
-        classfier, for predict decisiong regions,in most cased, it would be an object of LogisticRegression
-        labels, 
-        resolution, meshgrid resolution
-        cmap, cmap for dot of samples.
-        '''
-        markers = ('s', 'x', 'o', '^', 'v')
-        colors = cm[cmap].colors
 
-        # plot the decision surface
-        x1_min, x1_max = X[:, 0].min() - 1, X[:, 0].max() + 1
-        x2_min, x2_max = X[:, 1].min() - 1, X[:, 1].max() + 1
-        xx1, xx2 = np.meshgrid(np.arange(x1_min, x1_max, resolution),
-                            np.arange(x2_min, x2_max, resolution))
-        Z = classifier.predict(np.array([xx1.ravel(), xx2.ravel()]).T)
-        Z = Z.reshape(xx1.shape)
-        plt.figure(figsize=(5, 5))
-        plt.contourf(xx1, xx2, Z, alpha=0.4, cmap='Pastel2', antialiased=True)
-        plt.xlim(xx1.min(), xx1.max())
-        plt.ylim(xx2.min(), xx2.max())
+        # ✅ 可选保存
+        if save_to is not None:
+            p.save(save_to, dpi=self.dpi)
+            print(f"Bar chart saved to {save_to}")
 
-        # plot samples by class
-        for idx, cl in enumerate(np.unique(y)):
-            plt.scatter(x=X[y == cl, 0], 
-                        y=X[y == cl, 1],
-                        alpha=0.8, 
-                        color=colors[idx],
-                        marker=markers[idx], 
-                        label=labels[idx])
-        plt.legend(loc='lower left')
-        plt.tight_layout()
-        if save_to:
-            plt.savefig(save_to, transparent=True)
-        plt.show()
+        return p
 
+    def box(self,
+        df_long,
+        facet_col='metabo',   # column used for facet
+        group_col='group',    # column used for x-axis groups and box color
+        value_col='value',    # column used for y values
+        ncol=4,               # number of facets per row
+        group_order=None,     # explicit order of groups on x-axis
+        palette='Set1',       # brewer palette name for box fill colors
+        show_trend=True,      # whether to draw grey semi-transparent trend line
+        log_transform=False,   # whether to apply log10 transform to value_col
+        save_to=None
+    ):
+        """
+        Draw faceted boxplots from a long-format DataFrame.
+
+        Parameters
+        ----------
+        ...
+        log_transform : bool
+            If True, apply log10 transform to the value column before plotting.
+        """
+
+        df_plot = df_long.copy()
+        df_plot[facet_col] = df_plot[facet_col].astype(str)
+
+        # Optional log10 transform
+        if log_transform:
+            # 避免 log(0) 或负数报错：这里只对 >0 的做 log10
+            df_plot = df_plot[df_plot[value_col] > 0].copy()
+            df_plot[value_col] = np.log10(df_plot[value_col])
+            y_label = f'log10({value_col})'
+        else:
+            y_label = value_col
+
+        # Set group order (x-axis order)
+        if group_order is not None:
+            df_plot[group_col] = pd.Categorical(
+                df_plot[group_col],
+                categories=group_order,
+                ordered=True
+            )
+
+        # Compute per-facet × group summary (median) for trend line
+        summary_df = (
+            df_plot
+            .groupby([facet_col, group_col], observed=True)[value_col]
+            .median()
+            .reset_index()
+            .rename(columns={value_col: 'summary_value'})
+        )
+
+        # Base plot: boxplots + sample points
+        p = (
+            ggplot(df_plot, aes(x=group_col, y=value_col))
+            + geom_boxplot(aes(fill=group_col), outlier_shape=None)
+            + geom_point(alpha=0.4, size=1.0)
+            + facet_wrap(f'~{facet_col}', scales="free_y", ncol=ncol)
+            + scale_fill_brewer(type='qual', palette=palette)
+            + theme_bw()
+            + theme(
+                axis_text_x=element_text(rotation=45, hjust=1),
+            )
+            + labs(x="Group", y=y_label, fill="Group")
+        )
+
+        # Optional grey semi-transparent trend line between boxes
+        if show_trend:
+            p = p + geom_line(
+                data=summary_df,
+                mapping=aes(
+                    x=group_col,
+                    y='summary_value',
+                    group=1
+                ),
+                color='grey',
+                alpha=0.6,
+                size=0.7
+            )
+
+        # ✅ 可选保存
+        if save_to is not None:
+            p.save(save_to, dpi=self.dpi)
+            print(f"Bar chart saved to {save_to}")
+
+        return p
+
+    def donut(self, df, column, title="", na_replace="other",
+              palette="Nature_1", show_percent=True, save_to=None):
+        """
+        Draw a donut chart showing the proportion of each category
+        in a specified column, with optional saving to file.
+
+        Parameters
+        ----------
+        df : pandas.DataFrame
+            Input dataset.
+        column : str
+            Column name for frequency calculation.
+        title : str, optional
+            Plot title.
+        na_replace : str, default 'other'
+            Replacement text for missing values.
+        palette : str, optional
+            Color palette name ('Nature_1' or 'Nature_2').
+        show_percent : bool, default True
+            Whether to display percentages in labels.
+        save_to : str or None, default None
+            File path to save the figure. If None, only returns the figure.
+
+        Returns
+        -------
+        matplotlib.figure.Figure
+            The matplotlib Figure object.
+        """
+        if column not in df.columns:
+            raise ValueError(f"Column '{column}' not found in DataFrame")
+
+        # Replace NaN or None with the given text
+        data = df.copy()
+        data[column] = data[column].fillna(na_replace).astype(str)
+
+        # Count frequencies and compute percentages
+        freq = data[column].value_counts().reset_index()
+        freq.columns = [column, 'count']
+        freq['percent'] = freq['count'] / freq['count'].sum() * 100
+
+        # Label generation
+        freq['label'] = freq.apply(
+            lambda x: f"{x[column]} ({x['percent']:.1f}%)" if show_percent else x[column],
+            axis=1
+        )
+
+        # Select color palette (repeat colors if needed)
+        if palette in self.colors:
+            colors = self.colors[palette]
+        else:
+            colors = sns.color_palette("Set3").as_hex()
+        colors = colors * (len(freq) // len(colors) + 1)
+
+        # Create figure with constrained layout to avoid tight_layout warning
+        fig, ax = plt.subplots(figsize=self.figure_size, dpi=self.dpi, constrained_layout=True)
+
+        # Draw donut (a pie chart with width < 1)
+        wedges, texts = ax.pie(
+            freq["count"],
+            labels=freq["label"],
+            startangle=90,
+            counterclock=False,
+            colors=colors[:len(freq)],
+            textprops={'fontsize': self.fontsize * 0.7},
+            wedgeprops=dict(width=0.3, edgecolor='white')
+        )
+
+        # Add white circle at the center to make a donut-shaped pie
+        centre_circle = plt.Circle((0, 0), 0.70, fc='white')
+        fig.gca().add_artist(centre_circle)
+
+        ax.set_title(title, fontsize=self.fontsize * 1.2)
+        ax.axis('equal')  # Keep perfect circle proportions
+
+        # Save to file if specified
+        if save_to is not None:
+            fig.savefig(save_to, dpi=self.dpi, bbox_inches="tight")
+            print(f"Figure saved to {save_to}")
+
+        return fig
 
     def heatmap(self, df,
                 data_transfer = 'log10',
@@ -277,7 +545,7 @@ class Plot():
         # 7) 保存或返回
         if save_to:
             plot.save(save_to, transparent=True)
-        return plot    
+        return plot  
 
     def plsda_plt(self, T_scores, y, palette='Set2', save_to=None):
         """

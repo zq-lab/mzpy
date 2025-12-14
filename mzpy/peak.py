@@ -19,6 +19,7 @@ import warnings
 
 from . import ms, mz
 from . import similarity
+from .rest import np_classfy_df
 from .stat import enrich_df
 
 
@@ -118,7 +119,10 @@ class PeakFrame(pd.DataFrame):
             return ms.MSdata(data)
         self['MSMS'] = self['MSMS'].apply(lambda x: centroid(x))
 
-
+    def classfy_np(self, smiles_on='SMILES'):
+        df = np_classfy_df(self, smiles_on=smiles_on)
+        return df
+    
     def plot_chrom(self,
                    x = 'retentiontime',
                    y = 'intensity',
@@ -279,29 +283,31 @@ class PeakFrame(pd.DataFrame):
                         method=test_method)
         return enr    
     
-    def find_precursor_type(self, target_mass, ionmode, mz_on):
-        '''
-        find out precursor type according to the target compound mass (target_mass)
-        param:
-            target_mass, mass of target compound
-            ionmode, postive or negative
-        returns:
-            mzfram containing matched results.
-        '''
-        from .precursortype import load_precursors
-        from . import mz
-        df = self.copy()
-        df['Num Peaks'] = df['Num Peaks'].astype(int)
-        df = df[df['Num Peaks'] > 0]
-        df['precursortype'] = ''
-        pcs = load_precursors(target_mass, ionmode)
-        pcs = pcs[pcs['mz'] > 70]
-        for idx in df.index:
-            for j in pcs.index:
-                if mz.match(df.loc[idx, mz_on], pcs.loc[j, 'mz']) == True:                    
-                    df.loc[idx,'precursortype'] = pcs.loc[j, 'type']
-                    break
-        return df[df['precursortype'] != '']
+    # def find_precursor_type(self, target_mass, ionmode, mz_on):
+    #     '''
+    #     正负离子分开处理，找到的信号再合并
+    #     该函数要适合self中同时具有有正负离子信息、只具有正离子或只具有负离子的情况
+    #     find out precursor type according to the target compound mass (target_mass)
+    #     param:
+    #         target_mass, mass of target compound
+    #         ionmode, postive or negative
+    #     returns:
+    #         mzfram containing matched results.
+    #     '''
+    #     from .precursortype import load_precursors
+    #     from . import mz
+    #     df = self.copy()
+    #     df['Num Peaks'] = df['Num Peaks'].astype(int)
+    #     df = df[df['Num Peaks'] > 0]
+    #     df['precursortype'] = ''
+    #     pcs = load_precursors(target_mass, ionmode)
+    #     pcs = pcs[pcs['mz'] > 70]
+    #     for idx in df.index:
+    #         for j in pcs.index:
+    #             if mz.match(df.loc[idx, mz_on], pcs.loc[j, 'mz']) == True:                    
+    #                 df.loc[idx,'precursortype'] = pcs.loc[j, 'type']
+    #                 break
+    #     return df[df['precursortype'] != '']
     
 
     def flatten_msms_mz(self, intensity_tol=0, MSMS_on='MSMS', num_peaks_on = 'Num Peaks'):
@@ -489,12 +495,12 @@ class PeakFrame(pd.DataFrame):
         return counts.sort_values(by='n_matched', ascending=False)
 
 
-    def match_precursor_mz(self, mz, mz_on='precursormz', tol=0.003, tol_rel=5, mode='abs'):
-        '''
-        return precursor mz matched result
-        '''
-        condition = self[mz_on].apply(lambda x: mz.match_mz(x, mz, tol=tol, tol_rel=tol_rel, mode=mode))
-        return self[condition]
+    # def match_precursor_mz(self, mz, mz_on='precursormz', tol=0.003, tol_rel=5, mode='abs'):
+    #     '''
+    #     return precursor mz matched result
+    #     '''
+    #     condition = self[mz_on].apply(lambda x: mz.match_mz(x, mz, tol=tol, tol_rel=tol_rel, mode=mode))
+    #     return self[condition]
     
     def norm_msms(self, MSMS_on='MSMS', inplace=False):
         '''
@@ -562,15 +568,15 @@ class PeakFrame(pd.DataFrame):
         for _, row in self.iterrows():
             # 1) 非 MSMS 列
             for c in normal_cols:
-                append(f"{c}:{ row[c]}")                   
+                append(f"{c}: { row[c]}")                   
 
             # 2) MSMS 列（严格二维列表，每行2列）
             if  MSMS_on in self.columns:
                 msms_list = np.asarray(row[MSMS_on])  # [[mz, intensity], ...]
                 if (msms_list is None) or (msms_list.size == 0):
-                    append('Num Peaks:0')
+                    append('Num Peaks: 0')
                 else:
-                    append(f'Num Peaks:{len(msms_list)}')
+                    append(f'Num Peaks: {len(msms_list)}')
                     for mz, intensity in msms_list:
                         append(f"{mz}{MSMS_sep}{intensity}")
             append('') # 每条记录以空行分隔
@@ -659,8 +665,6 @@ class PeakFrame(pd.DataFrame):
            self['Num Peaks'] = 0
            print('Warning: no MSMS found!')
 
-
-
 ### readers
 #-----------------------------------------------------------------------------------
 
@@ -725,16 +729,10 @@ def read_mona_msp(fpath,
         df['smiles'] = df['Comments'].str.extract('SMILES=(.*?)"')
     return df
 
-
-def read_msd_ali(fname, washed=False):
-    from .metab import Metab
-    return Metab.read_msd_alignment(fname, washed=washed)
-
-
-def read_msd_msp(fname, use_relative_abundance=False, **kwargs):
+def read_msd_msp(fname, use_relative_abundance=False, include_fname=True, **kwargs):
     '''
     read peak list (msp format) exported from MS-Dial version 5.2 or higher
-    peak height and peak area are transfered into relative value to the base peak.
+    peak height and peak area are transferred into relative value to the base peak.
     use_relative_abundance: Whether to Use Relative Abundance
     return:
         a PeakFrame
@@ -743,26 +741,57 @@ def read_msd_msp(fname, use_relative_abundance=False, **kwargs):
         '''
         从注释文本(msp的comment字段)中提取峰高和峰面积
         '''
-        pkheight = re.search(r'PEAKHEIGHT=(\d+)', comment)  
-        pkarea = re.search(r'PEAKAREA=(\d+)', comment) 
-        pkid =  re.search(r'PEAKID=(\d+)', comment) 
+        pkheight = re.search(r'PEAKHEIGHT=(\d+)', comment or '')
+        pkarea   = re.search(r'PEAKAREA=(\d+)', comment or '')
+        pkid     = re.search(r'PEAKID=(\d+)', comment or '')
 
-        # 获取提取的数值  
-        pkheight_value = pkheight.group(1) if pkheight else None  
-        pkarea_value   = pkarea.group(1) if pkarea else None
-        pk_id          = pkid.group(1) if pkarea else -1
-        return pk_id, float(pkheight_value), float(pkarea_value)
+        # 修改逻辑：确保即使匹配不到也不会返回 None
+        pk_id          = int(pkid.group(1)) if pkid else -1
+        pkheight_value = float(pkheight.group(1)) if pkheight else np.nan
+        pkarea_value   = float(pkarea.group(1)) if pkarea else np.nan
 
-    df = read_msp(fname, ** kwargs)
+        return pk_id, pkheight_value, pkarea_value
+
+    df = read_msp(fname, **kwargs)
+
+    # 解析 COMMENT 列
     df[['pkid', 'peak_height', 'peak_area']] = df['COMMENT'].apply(_ex_intensity_).apply(pd.Series)
 
+    # 数据类型转换
+    df['pkid'] = df['pkid'].astype(int)
+    df[['peak_height', 'peak_area']] = df[['peak_height', 'peak_area']].astype(float)
+
     if use_relative_abundance:
-        base_pk_heght = df['peak_height'].max()
-        base_pk_area  = df['peak_area'].max()
-        df['peak_height'] = 100*df['peak_height']/base_pk_heght
-        df['peak_area']   = 100*df['peak_area']/base_pk_area
+        base_pk_heght = df['peak_height'].max(skipna=True)
+        base_pk_area  = df['peak_area'].max(skipna=True)
+        if base_pk_heght and not np.isnan(base_pk_heght):
+            df['peak_height'] = 100 * df['peak_height'] / base_pk_heght
+        if base_pk_area and not np.isnan(base_pk_area):
+            df['peak_area'] = 100 * df['peak_area'] / base_pk_area
+
+    if include_fname:
+        df['file'] = str(fname)
 
     return df
+
+def read_msd_msp_folder(folder, use_relative_abundance=False, **kwargs):
+    '''
+    Read all MSP files in the specified folder and merge them into a single peakFrame.
+    '''
+    from pathlib import Path
+    folder_path = Path(folder)
+    msp_files = [f for f in folder_path.iterdir() if f.is_file() and f.suffix.lower() == '.msp']
+    
+    if len(msp_files) == 0:
+        raise ValueError(f'not msp file was found in {folder}')
+    data = []
+    for f in msp_files:
+        print(f'reading:\t{f}', end='\r', flush=True)
+        df = read_msd_msp(str(f), use_relative_abundance, include_fname=True,  **kwargs)
+        if not df.empty:
+            data.append(df)
+    
+    return pd.concat(data, ignore_index=True)
 
 
 def read_msp(fpath,
@@ -806,6 +835,14 @@ def read_msp(fpath,
     # 将指定列转换为浮点数类型
     for col in to_float.intersection(df.columns):
         df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    if 'COMMENT' in df.columns and 'Comment' in df.columns:
+        # 同时存在COMMENT和Coment两列的情况处理
+        df['COMMENT'] = (
+            df['COMMENT'].fillna('') +
+            ((' | ' + df['Comment'].astype(str)).where(df['Comment'].notna(), ''))
+        )
+        df.drop(columns=['Comment'], inplace=True)
 
     return df
 
