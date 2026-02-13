@@ -19,3 +19,4 @@ mzpy.egg-info/SOURCES.txt
 mzpy.egg-info/dependency_links.txt
 mzpy.egg-info/requires.txt
 mzpy.egg-info/top_level.txt
+mzpy/mzX/dreaMS.py

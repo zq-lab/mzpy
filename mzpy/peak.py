@@ -107,7 +107,7 @@ class PeakFrame(pd.DataFrame):
                 ion['precursormz'] = line.split('=', 1)[1]
             elif line.strip() == '': # Prevent the cursor from overflowing in the next check
                 ion['collisionenergy'] = '10, 20 40 V'                
-                break
+                breaknpeaks_on
             elif line[0].isdigit():
                 mz, intensity = line.split(' ')[0:2]
                 MSMS.append([float(mz), float(intensity)])
@@ -119,6 +119,230 @@ class PeakFrame(pd.DataFrame):
             return ms.MSdata(data)
         self['MSMS'] = self['MSMS'].apply(lambda x: centroid(x))
 
+#################################################################
+
+    def convert_ms_array(self, ms_on='MSMS', T=False, inplace=False, ms_len=None, npeaks_on='Num Peaks'):
+        '''
+        Convert MSMS column to numpy float array with optional fixed length
+        
+        Parameters:
+        -----------
+        ms_on : str, default='MSMS'
+            Column name containing MSMS data
+            
+        T : bool, default=False
+            If True, transpose array to shape (2, N) where:
+                - First element: array of m/z values
+                - Second element: array of intensity values
+            If False, return shape (N, 2) where each row is [mz, intensity]
+        
+        inplace : bool, default=False
+            If True, modify the PeakFrame in-place and return None
+            If False, return the converted data without modifying the original
+        
+        ms_len : int or None, default=None
+            Specify fixed length for MSMS arrays:
+            - None: keep original length (no padding)
+            - 0: use maximum value in npeaks_on column
+            - positive int: use this value as fixed length
+                If smaller than max peaks count, raise warning and truncate data
+            
+            When ms_len is set, insufficient peaks are padded with [0, 0] 
+            (or [0] for each m/z and intensity if T=True)
+        
+        npeaks_on : str, default='Num Peaks'
+            Column name containing number of peaks, used when ms_len=0
+        
+        Returns:
+        --------
+        pandas.DataFrame or None
+            - If inplace=False: new DataFrame with MSMS column converted
+            - If inplace=True: None (modifies self in-place)
+        
+        Raises:
+        -------
+        ValueError
+            - If ms_on column not found
+            - If npeaks_on column not found when ms_len=0
+        
+        Warnings:
+        ---------
+        UserWarning
+            - If ms_len is smaller than max peaks count (data will be truncated)
+        
+        Examples:
+        ---------
+        >>> pf = PeakFrame(...)
+        
+        # Variable length arrays
+        >>> pf_new = pf.convert_ms_array()  # shape (N, 2) for each row
+        >>> pf_new = pf.convert_ms_array(T=True)  # shape (2, N) for each row
+        
+        # Fixed length arrays (pad to max peaks count)
+        >>> pf_new = pf.convert_ms_array(ms_len=0)  # pad to max in 'Num Peaks'
+        >>> pf_new = pf.convert_ms_array(ms_len=0, T=True)
+        
+        # Fixed length arrays with specific length
+        >>> pf_new = pf.convert_ms_array(ms_len=50)  # pad to 50 peaks
+        >>> pf_new = pf.convert_ms_array(ms_len=50, T=True)
+        
+        # Modify in-place
+        >>> pf.convert_ms_array(ms_len=0, inplace=True)
+        '''
+        if ms_on not in self.columns:
+            raise ValueError(f"Column '{ms_on}' not found in PeakFrame")
+        
+        # 确定固定长度
+        fixed_len = None
+        if ms_len is not None:
+            if ms_len == 0:
+                # 使用"Num Peaks"列的最大值
+                if npeaks_on not in self.columns:
+                    raise ValueError(f"Column '{npeaks_on}' not found in PeakFrame")
+                fixed_len = int(self[npeaks_on].max())
+            elif isinstance(ms_len, int) and ms_len > 0:
+                # 检查是否小于最大峰数
+                if npeaks_on in self.columns:
+                    max_peaks = int(self[npeaks_on].max())
+                    if ms_len < max_peaks:
+                        warnings.warn(
+                            f"ms_len={ms_len} is smaller than max peaks count {max_peaks}. "
+                            f"Data will be truncated to {ms_len} peaks.",
+                            UserWarning,
+                            stacklevel=2
+                        )
+                fixed_len = ms_len
+            else:
+                raise ValueError(f"ms_len must be None, 0, or a positive integer, got {ms_len}")
+        
+        # 获取MSMS数据
+        msms_data = self[ms_on].values
+        
+        # 转换为numpy数组
+        def convert_spectrum(spectrum):
+            """转换单个谱图为numpy数组"""
+            arr = np.asarray(spectrum, dtype=np.float64)
+            
+            # 确保是二维数组 (N, 2)
+            if arr.ndim == 1:
+                if len(arr) % 2 != 0:
+                    raise ValueError(f"Invalid spectrum shape: {arr.shape}")
+                arr = arr.reshape(-1, 2)
+            elif arr.ndim != 2 or arr.shape[1] != 2:
+                raise ValueError(f"Spectrum must have shape (N, 2), got {arr.shape}")
+            
+            # 如果指定了固定长度，进行padding或truncation
+            if fixed_len is not None:
+                n_peaks = arr.shape[0]
+                if n_peaks < fixed_len:
+                    # Pad with [0, 0]
+                    padding = np.zeros((fixed_len - n_peaks, 2), dtype=np.float64)
+                    arr = np.vstack([arr, padding])
+                elif n_peaks > fixed_len:
+                    # Truncate
+                    arr = arr[:fixed_len]
+            
+            # 根据T参数转置
+            if T:
+                return arr.T  # shape (2, N)
+            else:
+                return arr  # shape (N, 2)
+        
+        # 转换所有数据为列表（避免numpy数组形状不一致的问题）
+        converted = [convert_spectrum(x) for x in msms_data]
+        
+        if inplace:
+            # 就地修改
+            self[ms_on] = converted
+            return None
+        else:
+            # 返回新数据框
+            result = self.copy()
+            result[ms_on] = converted
+            return result
+
+    def refresh_npeaks(self, npeaks_on='Num Peaks', T=False, ms_on='MSMS'):
+        '''
+        Refresh (update) the "Num Peaks" column based on MSMS data
+        
+        Parameters:
+        -----------
+        npeaks_on : str, default='Num Peaks'
+            Column name to store the number of peaks
+            
+        T : bool, default=False
+            Indicates whether MSMS data is transposed:
+            - If T=False: MSMS has shape (N, 2), count peaks from first dimension (N)
+            - If T=True: MSMS has shape (2, N), count non-zero values in first element (m/z array)
+        
+        ms_on : str, default='MSMS'
+            Column name containing MSMS data
+        
+        Returns:
+        --------
+        None
+            Modifies npeaks_on column in-place
+        
+        Examples:
+        ---------
+        >>> pf = PeakFrame(...)
+        
+        # For non-transposed data (standard format)
+        >>> pf.refresh_npeaks()
+        >>> pf.refresh_npeaks(T=False)
+        
+        # For transposed data
+        >>> pf.refresh_npeaks(T=True)
+        
+        # With custom column names
+        >>> pf.refresh_npeaks(npeaks_on='Peak_Count', T=True, ms_on='MS2')
+        '''
+        if ms_on not in self.columns:
+            raise ValueError(f"Column '{ms_on}' not found in PeakFrame")
+        
+        def count_peaks(spectrum):
+            """Count peaks based on data format (transposed or not)"""
+            if spectrum is None or (isinstance(spectrum, float) and np.isnan(spectrum)):
+                return 0
+            
+            arr = np.asarray(spectrum)
+            
+            if arr.size == 0:
+                return 0
+            
+            if T:
+                # Transposed format: shape (2, N)
+                # Count non-zero values in the first element (m/z array)
+                # or count the length if first element is the mz array
+                if arr.ndim == 2 and arr.shape[0] == 2:
+                    # Count non-zero m/z values
+                    n_peaks = np.count_nonzero(arr[0])
+                    return int(n_peaks) if n_peaks > 0 else 0
+                else:
+                    # Fallback: if shape doesn't match, return length
+                    return arr.shape[0] if arr.ndim == 1 else arr.shape[-1]
+            else:
+                # Non-transposed format: shape (N, 2)
+                # Count peaks from first dimension
+                if arr.ndim == 2:
+                    return arr.shape[0]
+                elif arr.ndim == 1:
+                    # If 1D array, assume it's a flat list of [mz1, inten1, mz2, inten2, ...]
+                    return arr.shape[0] // 2 if arr.shape[0] % 2 == 0 else 0
+                else:
+                    return 0
+        
+        # Apply the counting function to update the column
+        self[npeaks_on] = self[ms_on].apply(count_peaks)
+
+
+
+
+
+
+
+    
+#################################################################
     def classfy_np(self, smiles_on='SMILES'):
         df = np_classfy_df(self, smiles_on=smiles_on)
         return df
@@ -281,7 +505,110 @@ class PeakFrame(pd.DataFrame):
                         n_total_matches,
                         use_fdr=use_fdr,
                         method=test_method)
-        return enr    
+        return enr  
+
+
+    def ex_ms_array_3d(self, ms_on='MSMS', T=False, ms_len=0, npeaks_on='Num Peaks', dtype=np.float64):
+        '''
+        Convert MSMS column (containing multiple 2D arrays) to a 3D numpy array
+        
+        Parameters:
+        -----------
+        ms_on : str, default='MSMS'
+            Column name containing MSMS data (each element should be a 2D numpy array)
+        
+        T : bool, default=False
+            Indicates whether to transpose output or input format:
+            - If input is not transposed (N, 2) and T=False: output (N_records, N, 2)
+            - If input is transposed (2, N) and T=False: output (N_records, N, 2) - will untranspose
+            - If T=True: output (N_records, 2, N)
+            
+        ms_len : int or None, default=None
+            Specify fixed length for MSMS arrays (same logic as convert_ms_array):
+            - None: keep original length (no padding)
+            - 0: use maximum value in npeaks_on column
+            - positive int: use this value as fixed length
+                If smaller than max peaks count, raise warning and truncate data
+            
+            When ms_len is set, insufficient peaks are padded with [0, 0]
+        
+        npeaks_on : str, default='Num Peaks'
+            Column name containing number of peaks, used when ms_len=0
+        
+        dtype : numpy dtype, default=np.float64
+            Data type for the output array
+        
+        Returns:
+        --------
+        numpy.ndarray
+            3D array with shape depending on T parameter:
+            - If T=False: (N_records, N_peaks, 2) - standard format
+            - If T=True: (N_records, 2, N_peaks) - transposed format
+        
+        Raises:
+        -------
+        ValueError
+            - If ms_on column not found
+            - If ms_len is negative or invalid
+            - If npeaks_on column not found when ms_len=0
+            - If MSMS arrays have inconsistent dimensions
+        
+        Warnings:
+        ---------
+        UserWarning
+            - If ms_len is smaller than max peaks count (data will be truncated)
+        
+        Examples:
+        ---------
+        >>> pf = PeakFrame(...)
+        
+        # Variable length, standard format (N_peaks, 2)
+        >>> arr_3d = pf.to_array_3d()
+        >>> arr_3d.shape
+        (5, 15, 2)
+        
+        # Variable length, transposed format (2, N_peaks)
+        >>> arr_3d = pf.to_array_3d(T=True)
+        >>> arr_3d.shape
+        (5, 2, 15)
+        
+        # Fixed length to max peaks, standard format
+        >>> arr_3d = pf.to_array_3d(ms_len=0)
+        >>> arr_3d.shape
+        (5, 61, 2)
+        
+        # Fixed length to max peaks, transposed format
+        >>> arr_3d = pf.to_array_3d(ms_len=0, T=True)
+        >>> arr_3d.shape
+        (5, 2, 61)
+        
+        # Fixed length with specific value
+        >>> arr_3d = pf.to_array_3d(ms_len=50, T=True)
+        >>> arr_3d.shape
+        (5, 2, 50)
+        '''
+        if ms_on not in self.columns:
+            raise ValueError(f"Column '{ms_on}' not found in PeakFrame")
+        if npeaks_on not in self.columns:
+            raise ValueError(f"Column '{npeaks_on}' not found in PeakFrame")
+
+        df = self.convert_ms_array(ms_on=ms_on,
+                                   T=T,
+                                   inplace=False,
+                                   ms_len=ms_len,
+                                   npeaks_on=npeaks_on)
+        msms_array = df['MSMS'].values
+        n_records = len(msms_array)
+        arr_3d = np.stack([msms_array[i] for i in range(n_records)], axis=0)
+        
+        return arr_3d
+        
+            
+        
+       
+
+
+
     
     # def find_precursor_type(self, target_mass, ionmode, mz_on):
     #     '''
@@ -493,14 +820,6 @@ class PeakFrame(pd.DataFrame):
         counts = counts[counts['n_matched'] > 0]
 
         return counts.sort_values(by='n_matched', ascending=False)
-
-
-    # def match_precursor_mz(self, mz, mz_on='precursormz', tol=0.003, tol_rel=5, mode='abs'):
-    #     '''
-    #     return precursor mz matched result
-    #     '''
-    #     condition = self[mz_on].apply(lambda x: mz.match_mz(x, mz, tol=tol, tol_rel=tol_rel, mode=mode))
-    #     return self[condition]
     
     def norm_msms(self, MSMS_on='MSMS', inplace=False):
         '''
@@ -693,15 +1012,31 @@ def read_mgf(fpath,
             elif line[0].isdigit():
                 mz, intensity = line.strip().split(sep_ms2)
                 item['MSMS'].append([float(mz), float(intensity)])
+    
     mgf = PeakFrame(data)
+    
     if 'CHARGE' in mgf.columns:
         mgf['CHARGE'] = mgf['CHARGE'].fillna('')
+    
     if 'RTINSECONDS' in mgf.columns:
         mgf['RTINSECONDS']   = mgf['RTINSECONDS'].astype(float)
         mgf['retentiontime'] = mgf['RTINSECONDS']/60
-    mgf[['precursormz', 'intensity']] = mgf['PEPMASS'].str.split(' ', expand=True)
-    mgf['precursormz'] = mgf['precursormz'].astype(float)
-    mgf['intensity']   = mgf['intensity'].astype(float)
+    
+    # 处理 PEPMASS 列，支持只有 mz 或 mz+intensity 的情况
+    if 'PEPMASS' in mgf.columns:
+        # 分割 PEPMASS，expand=True 会返回所有分割的列
+        pepmass_split = mgf['PEPMASS'].str.split(' ', expand=True, n=1)
+        
+        # 第一列总是存在的（mz值）
+        mgf['precursormz'] = pd.to_numeric(pepmass_split[0], errors='coerce')
+        
+        # 第二列可能不存在（intensity值）
+        if len(pepmass_split.columns) > 1:
+            mgf['intensity'] = pd.to_numeric(pepmass_split[1], errors='coerce')
+        else:
+            # 如果没有intensity值，用NaN填充
+            mgf['intensity'] = np.nan
+    
     if ionmode == 'auto':
         if 'CHARGE' in mgf.columns:
             mgf['ionmode'] = mgf['CHARGE'].apply(lambda x: \
@@ -711,9 +1046,10 @@ def read_mgf(fpath,
             mgf['ionmode'] = ''
     else:
         mgf['ionmode'] = ionmode
+    
     mgf['comment'] = fpath
 
-    return mgf.reset_index(drop=True)  
+    return mgf.reset_index(drop=True)
 
 
 def read_mona_msp(fpath,
