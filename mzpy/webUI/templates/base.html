@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}mzpy{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/apple.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <!-- Global Nav -->
+  <nav class="global-nav">
+    <a href="{{ url_for('dashboard.index') }}" class="nav-brand">mzpy</a>
+    <div class="nav-links">
+      <a href="{{ url_for('dashboard.index') }}">Home</a>
+      <a href="{{ url_for('data.upload') }}">Data</a>
+      <a href="{{ url_for('analysis.pca') }}">Analysis</a>
+      <a href="{{ url_for('dem.volcano') }}">DEM</a>
+      <a href="{{ url_for('venn.diagram') }}">Venn</a>
+      <a href="{{ url_for('enrichment.fella') }}">Enrichment</a>
+      {% if passwd_is_set %}
+        <a href="{{ url_for('auth.logout') }}">Log out</a>
+      {% endif %}
+    </div>
+  </nav>
+
+  <!-- Sub-Nav with progress steps -->
+  <div class="sub-nav">
+    <div class="sub-title">{% block subtitle %}Dashboard{% endblock %}</div>
+    <div class="progress-steps">
+      {% set steps = [
+        ('data.upload', '1. Upload'),
+        ('data.preview', '2. Preview'),
+        ('analysis.pca', '3. PCA'),
+        ('analysis.plsda', '4. PLSDA'),
+        ('dem.volcano', '5. Volcano'),
+        ('venn.diagram', '6. Venn'),
+        ('enrichment.fella', '7. Enrich')
+      ] %}
+      {% for route, label in steps %}
+        <a href="{{ url_for(route) }}" class="step {% if request.endpoint == route %}active{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <main class="container" style="padding-top: 32px; padding-bottom: 64px;">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <div class="container">
+      mzpy Web UI &mdash; metabolomics analysis pipeline
+    </div>
+  </footer>
+
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

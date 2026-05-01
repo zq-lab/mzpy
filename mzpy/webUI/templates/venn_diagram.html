@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Venn Diagram – mzpy{% endblock %}
+{% block subtitle %}6. Venn Diagram{% endblock %}
+
+{% block content %}
+<div class="tile tile-parchment" style="text-align: center;">
+  <h2>Venn Diagram</h2>
+  {% if img_url %}
+    <img src="{{ img_url }}" alt="Venn diagram" class="plot-img" style="margin-top: 24px; max-width: 720px;">
+  {% else %}
+    <p style="color: var(--muted-ink-48);">No diagram available.</p>
+  {% endif %}
+
+  <div style="margin-top: 32px; display: flex; gap: 16px; justify-content: center; flex-wrap: wrap;">
+    <form method="post" style="display: inline;">
+      <input type="hidden" name="subset" value="up">
+      <button type="submit" class="btn btn-primary">Select Up-regulated ({{ up_count }})</button>
+    </form>
+    <form method="post" style="display: inline;">
+      <input type="hidden" name="subset" value="dn">
+      <button type="submit" class="btn btn-ghost">Select Down-regulated ({{ dn_count }})</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

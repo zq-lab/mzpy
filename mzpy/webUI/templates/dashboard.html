@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Dashboard – mzpy{% endblock %}
+{% block subtitle %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="tile tile-parchment" style="text-align: center;">
+  <h1 style="font-size: 56px; line-height: 1.07;">mzpy</h1>
+  <p style="font-size: 28px; font-weight: 400; color: var(--muted-ink-80);">Metabolomics analysis, simplified.</p>
+  <div style="margin-top: 32px; display: flex; gap: 16px; justify-content: center; flex-wrap: wrap;">
+    <a href="{{ url_for('data.upload') }}" class="btn btn-primary">Start Analysis</a>
+    <a href="https://github.com/zq-lab/mzpy" class="btn btn-ghost" target="_blank">Documentation</a>
+  </div>
+</div>
+
+<div class="tile tile-light">
+  <div class="container">
+    <h2 style="text-align: center; margin-bottom: 16px;">Analysis Pipeline</h2>
+    <p style="text-align: center; color: var(--muted-ink-48); margin-bottom: 32px;">Follow the steps below to complete your metabolomics analysis.</p>
+
+    {% set pipeline = [
+      ('data.upload', '1', 'Upload', 'Import MSDial alignment'),
+      ('data.preview', '2', 'Preview', 'Verify auto-detected groups'),
+      ('analysis.pca', '3', 'PCA', 'Unsupervised exploration'),
+      ('analysis.plsda', '4', 'PLSDA', 'Supervised modelling & VIP'),
+      ('dem.volcano', '5', 'Volcano', 'Differential metabolites'),
+      ('venn.diagram', '6', 'Venn', 'Compare contrasts'),
+      ('enrichment.fella', '7', 'Enrichment', 'FELLA pathway analysis')
+    ] %}
+
+    <div class="pipeline-track">
+      {% for route, num, title, desc in pipeline %}
+        <a href="{{ url_for(route) }}" class="pipeline-step {% if request.endpoint == route %}active{% endif %}">
+          <div class="badge">{{ num }}</div>
+          <div class="title">{{ title }}</div>
+          <div class="desc">{{ desc }}</div>
+        </a>
+        {% if not loop.last %}
+          <div class="pipeline-connector"></div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

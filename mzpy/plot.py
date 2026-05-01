@@ -1,931 +1,1264 @@
-from itertools import chain
+"""
+mzpy.plot
+=========
 
-from matplotlib import colormaps as cm
-from matplotlib.colors import ListedColormap, to_hex
+Unified plotting utilities for mass-spectrometry and metabolomics workflows.
+
+All *plotnine*-based functions share a single colour scheme and theme.
+*Venn* diagrams and a few specialty plots (centroid spectrum, molecule grid,
+chemical network) keep their original backends for technical reasons.
+
+Colour scheme
+-------------
+Three families are predefined and can be changed globally via
+:func:`set_color_scheme`:
+
+* ``sequential`` – blue gradient for continuous data.
+* ``diverging``  – centred red-white-blue palette (ColorBrewer2).
+* ``qualitative`` – category-safe 10-colour set.
+
+The diverging palette defaults to
+``['#ca0020','#f4a582','#f7f7f7','#92c5de','#0571b0']``.
+"""
+
+from __future__ import annotations
+
+import warnings
+from itertools import chain
+from typing import Dict, List, Optional, Sequence, Tuple, Union
+
+import numpy as np
+import pandas as pd
+
+# ── matplotlib / seaborn ────────────────────────────────────────
+import matplotlib
+matplotlib.use("Agg")  # 非交互式后端，适用于服务器环境
 import matplotlib.patches as patches
 import matplotlib.pyplot as plt
-import numpy as np
-
-import pandas as pd
-from plotnine import *
+from matplotlib.colors import ListedColormap, to_hex
 import seaborn as sns
-from sklearn.decomposition import PCA
+
+# ── plotnine ────────────────────────────────────────────────────
+from plotnine import (
+    aes,
+    coord_flip,
+    element_blank,
+    element_rect,
+    element_text,
+    facet_wrap,
+    geom_boxplot,
+    geom_col,
+    geom_hline,
+    geom_line,
+    geom_point,
+    geom_ribbon,
+    geom_segment,
+    geom_text,
+    geom_vline,
+    ggplot,
+    labs,
+    scale_color_brewer,
+    scale_color_manual,
+    scale_fill_brewer,
+    scale_fill_manual,
+    scale_shape_manual,
+    stat_ellipse,
+    theme,
+    theme_bw,
+    theme_classic,
+    theme_matplotlib,
+    xlim,
+    ylim,
+)
+
+# ── sklearn / rdkit / igraph (optional) ─────────────────────────
+try:
+    from sklearn.decomposition import PCA
+    from sklearn.linear_model import LogisticRegression
+    _HAS_SKLEARN = True
+except Exception:  # pragma: no cover
+    _HAS_SKLEARN = False
+
+try:
+    from rdkit import Chem, DataStructs  # type: ignore[import-untyped]
+    from rdkit.Chem import Draw, rdFingerprintGenerator  # type: ignore[import-untyped]
+    _HAS_RDKIT = True
+except Exception:  # pragma: no cover
+    _HAS_RDKIT = False
+
+try:
+    from igraph import Graph, plot as igplot  # type: ignore[import-untyped]
+    _HAS_IGRAPH = True
+except Exception:  # pragma: no cover
+    _HAS_IGRAPH = False
+
+# ═══════════════════════════════════════════════════════════════
+#  Global defaults
+# ═══════════════════════════════════════════════════════════════
+
+_DEFAULT_COLORS: Dict[str, List[str]] = {
+    "sequential": [
+        "#f7fbff", "#deebf7", "#c6dbef", "#9ecae1",
+        "#6baed6", "#4292c6", "#2171b5", "#08519c", "#08306b",
+    ],
+    "diverging": [
+        "#ca0020", "#f4a582", "#f7f7f7", "#92c5de", "#0571b0",
+    ],
+    "qualitative": [
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+    ],
+}
+
+_CURRENT_COLORS = {k: v.copy() for k, v in _DEFAULT_COLORS.items()}
+
+_DEFAULT_FIGSIZE: Tuple[float, float] = (5.0, 5.0)
+_DEFAULT_DPI: int = 300
+_DEFAULT_FONTSIZE: int = 12
 
 
-# class Plot():
-#     def __init__(self, base_theme = None,
-#                 fontsize = 16,
-#                 figure_size = (5, 5),
-#                 dpi = 120):
-#         if base_theme == None:
-#             base_theme = theme_matplotlib()
+# ═══════════════════════════════════════════════════════════════
+#  Public helpers – colour & size
+# ═══════════════════════════════════════════════════════════════
 
-#         self.theme = (base_theme + 
-#             theme(
-#                 axis_title         = element_text(size=fontsize*1.3),
-#                 axis_text          = element_text(size=fontsize),
-#                 legend_title       = element_text(size=fontsize),
-#                 legend_text        = element_text(size=fontsize*0.85),
-#                 legend_background  = element_rect(fill=None, color=None),
-#                 legend_position    = (0.95, 0.95),
-#                 figure_size        = figure_size,
-#                 dpi                = dpi))
-        
-#         self.fontsize = fontsize
-#         self.figure_size = figure_size
-#         self.dpi = dpi
+def set_color_scheme(scheme: Dict[str, Sequence[str]]) -> None:
+    """Replace the global colour palette.
 
-#         # Nature 系列参考 https://zhuanlan.zhihu.com/p/670396774
-#         self.colors = {
-#             'Nature_1': ['#217185', '#D95319', '#FED976', '#77AC30'],
-#             'Nature_2': ['#A5AEB7', '#925EB0', '#37E99F4', '#CC7C71', '#7AB656']
-#         }
-        
-    
-#     def bubble(self, df,
-#                x:str       ='impact',
-#                y:str       = '_pFDR_',
-#                fill:str    = 'category',
-#                size:str    = '_n_match_',
-#                n_top:int   = None,
-#                palette:str = 'Dark2',
-#                save_to:str = None):
-#         # 需要注意的是，像 'tab10' 这种来自 Matplotlib 的命名通常不在原生的 ColorBrewer 范围里
-#         # 可能会出现找不到该调色板或默认回退为其他 palette 的情况。
-#         if n_top:
-#             df = df.head(n_top)
-#         n_duplicated = df.duplicated(subset=[x,y]).value_counts().get(True, 0)
-#         if n_duplicated > 0:
-#             print(f'There are {n_duplicated} data points overlapping!')
-
-#         plot = (ggplot(df, aes(x=x, y=y, size=size, fill=fill)) +
-#                 geom_point(alpha=0.45) +
-#                 scale_fill_brewer(type='qualitative', palette=palette) +
-#                 self.theme
-#         )
-#         if save_to:
-#             plot.save(save_to, transparent=True)
-#         return plot
-    
-    
-#     def decision_regions(self, X, y, labels, classifier, resolution=0.02, cmap='tab10', save_to=None):
-#         '''
-#         绘制决策区域
-#         X, feature matrix
-#         y, lable vector,correspondings to X
-#         classfier, for predict decisiong regions,in most cased, it would be an object of LogisticRegression
-#         labels, 
-#         resolution, meshgrid resolution
-#         cmap, cmap for dot of samples.
-#         '''
-#         markers = ('s', 'x', 'o', '^', 'v')
-#         colors = cm[cmap].colors
-
-#         # plot the decision surface
-#         x1_min, x1_max = X[:, 0].min() - 1, X[:, 0].max() + 1
-#         x2_min, x2_max = X[:, 1].min() - 1, X[:, 1].max() + 1
-#         xx1, xx2 = np.meshgrid(np.arange(x1_min, x1_max, resolution),
-#                             np.arange(x2_min, x2_max, resolution))
-#         Z = classifier.predict(np.array([xx1.ravel(), xx2.ravel()]).T)
-#         Z = Z.reshape(xx1.shape)
-#         plt.figure(figsize=(5, 5))
-#         plt.contourf(xx1, xx2, Z, alpha=0.4, cmap='Pastel2', antialiased=True)
-#         plt.xlim(xx1.min(), xx1.max())
-#         plt.ylim(xx2.min(), xx2.max())
-
-#         # plot samples by class
-#         for idx, cl in enumerate(np.unique(y)):
-#             plt.scatter(x=X[y == cl, 0], 
-#                         y=X[y == cl, 1],
-#                         alpha=0.8, 
-#                         color=colors[idx],
-#                         marker=markers[idx], 
-#                         label=labels[idx])
-#         plt.legend(loc='lower left')
-#         plt.tight_layout()
-#         if save_to:
-#             plt.savefig(save_to, transparent=True)
-#         plt.show()
+    Parameters
+    ----------
+    scheme : dict
+        Must contain keys ``'sequential'``, ``'diverging'``,
+        ``'qualitative'``.  Values are lists of hex colour strings.
+    """
+    global _CURRENT_COLORS
+    for key in ("sequential", "diverging", "qualitative"):
+        if key in scheme:
+            _CURRENT_COLORS[key] = list(scheme[key])
 
 
-# import pandas as pd
-# import numpy as np
-# import seaborn as sns
-# import matplotlib.pyplot as plt
-# from plotnine import *
+def set_figure_size(
+    size: Tuple[float, float] = (5.0, 5.0),
+    dpi: int = 300,
+    fontsize: int = 12,
+) -> None:
+    """Set the default figure size, resolution and font size."""
+    global _DEFAULT_FIGSIZE, _DEFAULT_DPI, _DEFAULT_FONTSIZE
+    _DEFAULT_FIGSIZE = size
+    _DEFAULT_DPI = dpi
+    _DEFAULT_FONTSIZE = fontsize
 
-class Plot():
-    def __init__(self, base_theme=None,
-                 fontsize=20,
-                 figure_size=(5, 5),
-                 dpi=96):
-        if base_theme is None:
-            base_theme = theme_matplotlib()
 
-        # Define basic theme for all ggplot objects
-        self.theme = (base_theme + 
-            theme(
-                axis_title         = element_text(size=fontsize*1.3),
-                axis_text          = element_text(size=fontsize),
-                legend_title       = element_text(size=fontsize),
-                legend_text        = element_text(size=fontsize*0.85),
-                legend_background  = element_rect(fill=None, color=None),
-                legend_position    = (0.95, 0.95),
-                figure_size        = figure_size,
-                dpi                = dpi))
-        
-        self.fontsize = fontsize
-        self.figure_size = figure_size
-        self.dpi = dpi
+def get_color_scheme() -> Dict[str, List[str]]:
+    """Return the currently active colour scheme (deep copy)."""
+    return {k: v.copy() for k, v in _CURRENT_COLORS.items()}
 
-        # Predefined color palettes inspired by Nature journals
-        self.colors = {
-            'Nature_1': ['#217185', '#D95319', '#FED976', '#77AC30'],
-            'Nature_2': ['#A5AEB7', '#925EB0', '#37E99F', '#CC7C71', '#7AB656']
-        }
 
-    def bar(self, df, column, title="", na_replace="other", palette="Nature_1", save_to=None):
-        """
-        Draw a frequency bar chart (largest category on top) in a single color using plotnine.
+# ═══════════════════════════════════════════════════════════════
+#  Internal helpers
+# ═══════════════════════════════════════════════════════════════
 
-        Parameters
-        ----------
-        df : pandas.DataFrame
-            Input DataFrame.
-        column : str
-            Column to calculate frequency.
-        title : str, optional
-            Plot title.
-        na_replace : str, default 'other'
-            Replacement value for missing data.
-        palette : str, optional
-            Color palette name ('Nature_1' or 'Nature_2').
-        save_to : str or None, default None
-            File path to save the chart.
+def _get_theme(
+    figure_size: Optional[Tuple[float, float]] = None,
+    dpi: Optional[int] = None,
+    fontsize: Optional[int] = None,
+):
+    """Build a reusable plotnine theme."""
+    fs = fontsize or _DEFAULT_FONTSIZE
+    fig = figure_size or _DEFAULT_FIGSIZE
+    dp = dpi or _DEFAULT_DPI
+    return (
+        theme_matplotlib()
+        + theme(
+            axis_title=element_text(size=fs * 1.3),
+            axis_text=element_text(size=fs),
+            legend_title=element_text(size=fs),
+            legend_text=element_text(size=fs * 0.85),
+            legend_background=element_rect(fill=None, color=None),
+            legend_position=(0.95, 0.95),
+            figure_size=fig,
+            dpi=dp,
+        )
+    )
 
-        Returns
-        -------
-        plotnine.ggplot
-            The plotnine plot object.
-        """
-        if column not in df.columns:
-            raise ValueError(f"Column '{column}' not found in DataFrame.")
 
-        # ✅ 复制 DataFrame 避免修改原数据
-        data = df.copy()
-        data[column] = data[column].fillna(na_replace).astype(str)
+def _palette(color_type: str = "qualitative") -> List[str]:
+    """Return the current palette for a given colour family."""
+    return _CURRENT_COLORS.get(color_type, _CURRENT_COLORS["qualitative"])
 
-        # ✅ 统计频率（按值升序排序，翻转后最大值在上方）
-        freq = data[column].value_counts().reset_index()
-        freq.columns = [column, "count"]
+
+def _save_plotnine(p, save_to: Optional[str], dpi: Optional[int] = None) -> None:
+    if save_to is not None:
+        p.save(save_to, dpi=dpi or _DEFAULT_DPI)
+
+
+def _save_mpl(fig, save_to: Optional[str], dpi: Optional[int] = None) -> None:
+    if save_to is not None:
+        fig.savefig(save_to, dpi=dpi or _DEFAULT_DPI, bbox_inches="tight")
+
+
+# ═══════════════════════════════════════════════════════════════
+#  1. Bar chart
+# ═══════════════════════════════════════════════════════════════
+
+def plot_bar(
+    df: pd.DataFrame,
+    x: str,
+    y: Optional[str] = None,
+    fill: Optional[str] = None,
+    title: str = "",
+    na_replace: str = "other",
+    color_type: str = "qualitative",
+    figure_size: Optional[Tuple[float, float]] = None,
+    save_to: Optional[str] = None,
+):
+    """Frequency or value bar chart (plotnine).
+
+    If *y* is omitted the frequency of *x* is computed automatically.
+    """
+    if x not in df.columns:
+        raise ValueError(f"Column '{x}' not found in DataFrame.")
+
+    data = df.copy()
+    data[x] = data[x].fillna(na_replace).astype(str)
+
+    if y is None:
+        freq = data[x].value_counts().reset_index()
+        freq.columns = [x, "count"]
         freq = freq.sort_values("count", ascending=True).reset_index(drop=True)
+        freq[x] = pd.Categorical(freq[x], categories=freq[x].tolist(), ordered=True)
+        y_col = "count"
+        y_label = "Frequency"
+    else:
+        if y not in data.columns:
+            raise ValueError(f"Column '{y}' not found in DataFrame.")
+        freq = data.sort_values(y, ascending=True).reset_index(drop=True)
+        freq[x] = pd.Categorical(freq[x], categories=freq[x].tolist(), ordered=True)
+        y_col = y
+        y_label = y
 
-        # ✅ 设置分类顺序（ordered=True 保证顺序不被打乱）
-        freq[column] = pd.Categorical(freq[column], categories=freq[column].tolist(), ordered=True)
+    colors = _palette(color_type)
 
-        # ✅ 使用指定色板的第一个颜色
-        if palette in self.colors:
-            color = self.colors[palette][0]
-        else:
-            color = sns.color_palette("Set2")[0]
-
-        # ✅ 绘制单色条形图
+    if fill is not None and fill in freq.columns:
         p = (
-            ggplot(freq, aes(x=column, y="count")) +
-            geom_col(fill=color, show_legend=False) +  # 单一颜色
-            coord_flip() +
-            labs(title=title, x=column, y="Frequency") +
-            self.theme +
-            theme(
-                axis_text_x=element_text(size=self.fontsize * 0.7),
-                axis_text_y=element_text(size=self.fontsize * 0.7)
-            )
+            ggplot(freq, aes(x=x, y=y_col, fill=fill))
+            + geom_col(show_legend=True)
+            + scale_fill_manual(values=colors)
+            + coord_flip()
         )
-
-        # ✅ 可选保存
-        if save_to is not None:
-            p.save(save_to, dpi=self.dpi)
-            print(f"Bar chart saved to {save_to}")
-
-        return p
-
-    def box(self,
-        df_long,
-        facet_col='metabo',   # column used for facet
-        group_col='group',    # column used for x-axis groups and box color
-        value_col='value',    # column used for y values
-        ncol=4,               # number of facets per row
-        group_order=None,     # explicit order of groups on x-axis
-        palette='Set1',       # brewer palette name for box fill colors
-        show_trend=True,      # whether to draw grey semi-transparent trend line
-        log_transform=False,   # whether to apply log10 transform to value_col
-        save_to=None
-    ):
-        """
-        Draw faceted boxplots from a long-format DataFrame.
-
-        Parameters
-        ----------
-        ...
-        log_transform : bool
-            If True, apply log10 transform to the value column before plotting.
-        """
-
-        df_plot = df_long.copy()
-        df_plot[facet_col] = df_plot[facet_col].astype(str)
-
-        # Optional log10 transform
-        if log_transform:
-            # 避免 log(0) 或负数报错：这里只对 >0 的做 log10
-            df_plot = df_plot[df_plot[value_col] > 0].copy()
-            df_plot[value_col] = np.log10(df_plot[value_col])
-            y_label = f'log10({value_col})'
-        else:
-            y_label = value_col
-
-        # Set group order (x-axis order)
-        if group_order is not None:
-            df_plot[group_col] = pd.Categorical(
-                df_plot[group_col],
-                categories=group_order,
-                ordered=True
-            )
-
-        # Compute per-facet × group summary (median) for trend line
-        summary_df = (
-            df_plot
-            .groupby([facet_col, group_col], observed=True)[value_col]
-            .median()
-            .reset_index()
-            .rename(columns={value_col: 'summary_value'})
-        )
-
-        # Base plot: boxplots + sample points
+    else:
         p = (
-            ggplot(df_plot, aes(x=group_col, y=value_col))
-            + geom_boxplot(aes(fill=group_col), outlier_shape=None)
-            + geom_point(alpha=0.4, size=1.0)
-            + facet_wrap(f'~{facet_col}', scales="free_y", ncol=ncol)
-            + scale_fill_brewer(type='qual', palette=palette)
-            + theme_bw()
-            + theme(
-                axis_text_x=element_text(rotation=45, hjust=1),
-            )
-            + labs(x="Group", y=y_label, fill="Group")
+            ggplot(freq, aes(x=x, y=y_col))
+            + geom_col(fill=colors[0], show_legend=False)
+            + coord_flip()
         )
 
-        # Optional grey semi-transparent trend line between boxes
+    p = (
+        p
+        + labs(title=title, x=x, y=y_label)
+        + _get_theme(figure_size=figure_size)
+        + theme(
+            axis_text_x=element_text(size=_DEFAULT_FONTSIZE * 0.7),
+            axis_text_y=element_text(size=_DEFAULT_FONTSIZE * 0.7),
+        )
+    )
+
+    _save_plotnine(p, save_to)
+    return p
+
+
+# ═══════════════════════════════════════════════════════════════
+#  2. Box plot
+# ═══════════════════════════════════════════════════════════════
+
+def plot_box(
+    df: pd.DataFrame,
+    x: str,
+    y: str,
+    fill: Optional[str] = None,
+    facet: Optional[str] = None,
+    ncol: int = 4,
+    group_order: Optional[List[str]] = None,
+    color_type: str = "qualitative",
+    show_trend: bool = True,
+    log_transform: bool = False,
+    figure_size: Optional[Tuple[float, float]] = None,
+    save_to: Optional[str] = None,
+):
+    """Faceted boxplot from long-format data (plotnine)."""
+    df_plot = df.copy()
+    df_plot[x] = df_plot[x].astype(str)
+
+    if log_transform:
+        df_plot = df_plot[df_plot[y] > 0].copy()
+        df_plot[y] = np.log10(df_plot[y])
+        y_label = f"log10({y})"
+    else:
+        y_label = y
+
+    if group_order is not None:
+        df_plot[x] = pd.Categorical(df_plot[x], categories=group_order, ordered=True)
+
+    colors = _palette(color_type)
+    fill_col = fill if fill is not None else x
+
+    p = (
+        ggplot(df_plot, aes(x=x, y=y))
+        + geom_boxplot(aes(fill=fill_col), outlier_shape=None)
+        + geom_point(alpha=0.4, size=1.0)
+        + scale_fill_manual(values=colors)
+        + labs(x="Group", y=y_label, fill=fill_col)
+        + theme_bw()
+        + theme(axis_text_x=element_text(rotation=45, hjust=1))
+        + _get_theme(figure_size=figure_size)
+    )
+
+    if facet is not None:
+        p = p + facet_wrap(f"~{facet}", scales="free_y", ncol=ncol)
         if show_trend:
+            summary_df = (
+                df_plot.groupby([facet, x], observed=True)[y]
+                .median()
+                .reset_index()
+                .rename(columns={y: "summary_value"})
+            )
             p = p + geom_line(
                 data=summary_df,
-                mapping=aes(
-                    x=group_col,
-                    y='summary_value',
-                    group=1
-                ),
-                color='grey',
+                mapping=aes(x=x, y="summary_value", group=1),
+                color="grey",
                 alpha=0.6,
-                size=0.7
+                size=0.7,
             )
 
-        # ✅ 可选保存
-        if save_to is not None:
-            p.save(save_to, dpi=self.dpi)
-            print(f"Bar chart saved to {save_to}")
+    _save_plotnine(p, save_to)
+    return p
 
-        return p
 
-    def donut(self, df, column, title="", na_replace="other",
-              palette="Nature_1", show_percent=True, save_to=None):
-        """
-        Draw a donut chart showing the proportion of each category
-        in a specified column, with optional saving to file.
+# ═══════════════════════════════════════════════════════════════
+#  3. Donut chart  (matplotlib)
+# ═══════════════════════════════════════════════════════════════
 
-        Parameters
-        ----------
-        df : pandas.DataFrame
-            Input dataset.
-        column : str
-            Column name for frequency calculation.
-        title : str, optional
-            Plot title.
-        na_replace : str, default 'other'
-            Replacement text for missing values.
-        palette : str, optional
-            Color palette name ('Nature_1' or 'Nature_2').
-        show_percent : bool, default True
-            Whether to display percentages in labels.
-        save_to : str or None, default None
-            File path to save the figure. If None, only returns the figure.
+def plot_donut(
+    df: pd.DataFrame,
+    column: str,
+    title: str = "",
+    na_replace: str = "other",
+    color_type: str = "qualitative",
+    show_percent: bool = True,
+    figure_size: Optional[Tuple[float, float]] = None,
+    save_to: Optional[str] = None,
+):
+    """Donut / ring chart (matplotlib)."""
+    if column not in df.columns:
+        raise ValueError(f"Column '{column}' not found in DataFrame")
 
-        Returns
-        -------
-        matplotlib.figure.Figure
-            The matplotlib Figure object.
-        """
-        if column not in df.columns:
-            raise ValueError(f"Column '{column}' not found in DataFrame")
+    data = df.copy()
+    data[column] = data[column].fillna(na_replace).astype(str)
 
-        # Replace NaN or None with the given text
-        data = df.copy()
-        data[column] = data[column].fillna(na_replace).astype(str)
+    freq = data[column].value_counts().reset_index()
+    freq.columns = [column, "count"]
+    freq["percent"] = freq["count"] / freq["count"].sum() * 100
+    freq["label"] = freq.apply(
+        lambda r: f"{r[column]} ({r['percent']:.1f}%)" if show_percent else r[column],
+        axis=1,
+    )
 
-        # Count frequencies and compute percentages
-        freq = data[column].value_counts().reset_index()
-        freq.columns = [column, 'count']
-        freq['percent'] = freq['count'] / freq['count'].sum() * 100
+    colors = _palette(color_type)
+    colors = colors * (len(freq) // len(colors) + 1)
 
-        # Label generation
-        freq['label'] = freq.apply(
-            lambda x: f"{x[column]} ({x['percent']:.1f}%)" if show_percent else x[column],
-            axis=1
+    fig, ax = plt.subplots(
+        figsize=figure_size or _DEFAULT_FIGSIZE,
+        dpi=_DEFAULT_DPI,
+        constrained_layout=True,
+    )
+    wedges, texts = ax.pie(
+        freq["count"],
+        labels=freq["label"],
+        startangle=90,
+        counterclock=False,
+        colors=colors[: len(freq)],
+        textprops={"fontsize": _DEFAULT_FONTSIZE * 0.7},
+        wedgeprops=dict(width=0.3, edgecolor="white"),
+    )
+    centre_circle = plt.Circle((0, 0), 0.70, fc="white")
+    ax.add_artist(centre_circle)
+    ax.set_title(title, fontsize=_DEFAULT_FONTSIZE * 1.2)
+    ax.axis("equal")
+
+    _save_mpl(fig, save_to)
+    return fig
+
+
+# ═══════════════════════════════════════════════════════════════
+#  4. Heatmap  (seaborn)
+# ═══════════════════════════════════════════════════════════════
+
+def plot_heatmap(
+    df: pd.DataFrame,
+    data_transfer: Optional[str] = "log10",
+    color_type: str = "diverging",
+    title: str = r"Heatmap of Log$_{10}$ (Peak Area)",
+    xlab: str = "Sample",
+    ylab: str = "Metabolite",
+    figure_size: Optional[Tuple[float, float]] = None,
+    save_to: Optional[str] = None,
+):
+    """Clustered heatmap (seaborn)."""
+    if data_transfer == "log10":
+        data = df.apply(lambda x: np.log(x + 1))
+        cbar_label = r"log$_{10}$ (peak area)"
+    elif data_transfer == "relative":
+        base = df.max().max()
+        data = (df / base) * 100 if base > 0 else df
+        cbar_label = "Relative intensity (%)"
+    elif data_transfer is None or data_transfer == "":
+        data = df
+        cbar_label = "Intensity"
+    else:
+        raise ValueError(
+            f"Unknown data_transfer: {data_transfer}. "
+            "Use 'log10', 'relative', or None."
         )
 
-        # Select color palette (repeat colors if needed)
-        if palette in self.colors:
-            colors = self.colors[palette]
-        else:
-            colors = sns.color_palette("Set3").as_hex()
-        colors = colors * (len(freq) // len(colors) + 1)
-
-        # Create figure with constrained layout to avoid tight_layout warning
-        fig, ax = plt.subplots(figsize=self.figure_size, dpi=self.dpi, constrained_layout=True)
-
-        # Draw donut (a pie chart with width < 1)
-        wedges, texts = ax.pie(
-            freq["count"],
-            labels=freq["label"],
-            startangle=90,
-            counterclock=False,
-            colors=colors[:len(freq)],
-            textprops={'fontsize': self.fontsize * 0.7},
-            wedgeprops=dict(width=0.3, edgecolor='white')
-        )
-
-        # Add white circle at the center to make a donut-shaped pie
-        centre_circle = plt.Circle((0, 0), 0.70, fc='white')
-        fig.gca().add_artist(centre_circle)
-
-        ax.set_title(title, fontsize=self.fontsize * 1.2)
-        ax.axis('equal')  # Keep perfect circle proportions
-
-        # Save to file if specified
-        if save_to is not None:
-            fig.savefig(save_to, dpi=self.dpi, bbox_inches="tight")
-            print(f"Figure saved to {save_to}")
-
-        return fig
-
-    def heatmap(self, df,
-                data_transfer = 'log10',
-                palette='seismic', 
-                title = r"Heatmap of Log$_{10}$ (Peak Area)",
-                xlab = "Sample",
-                ylab = "Metabolite",
-                save_to = None):
-        #  将数据转换为对数（自然对数），使用 apply 方法
-        if data_transfer == 'log10':
-            data = df.apply(lambda x: np.log(x + 1))  # 加1避免对0取对数
-        elif data_transfer == 'relative':
-            base_pk = df.max().max()  # 获取整个 DataFrame 的最大值  
-            data = (df / base_pk) * 100  
-        elif (data_transfer is None) or (data_transfer == ''):
-            data = df
-        else:
-            raise ValueError(f'unknown data_transfer was set: {data_transfer}. (log10, relative or None are acceptable.)')
-
-        # 设置绘图风格（移除网格线）
-        sns.set_style("white")
-
-        # 动态计算图像大小  
-        num_rows, num_cols = data.shape  
-        # 设置图像大小，确保小方块在不同数据量情况下保持近似大小  
-        plt.figure(figsize=(max(5, num_cols * 0.5), max(5, num_rows * 0.5)))  # 根据列数和行数动态调整图像大小
-        plot = sns.heatmap(
-            data,
-            cmap=palette,  # 使用蓝-白-红渐变色彩方案
-            center=np.median(data.values.flatten()),  # 将中间值设置为中位数
-            linewidths=0.05,
-            linecolor='white',
-            square=True,  # 单元格强制为正方形
-            cbar_kws={"shrink": 0.8, "label": r'log$_{10}$ (peak area)'}  # 调整颜色条大小
-        )
-
-        # 设置标题和标签
-        plt.title(title, fontsize=16)
-        plt.xlabel(xlab, fontsize=12)
-        plt.ylabel(ylab, fontsize=12)
-
-        # # 调整 x 轴标签的旋转角度
-        plot.set_xticklabels(plot.get_xticklabels(), rotation=90, ha="center")
-        plot.set_yticklabels(plot.get_yticklabels(), rotation=0, ha="right")  # 设置为0度，右对齐
-
-        if save_to:
-            plt.savefig(save_to, format=save_to.split('.')[-1], bbox_inches='tight')    
-
-        plt.show() 
-
-    def line_with_error_band(self,
-                             df_long,
-                             id_on = 'id',
-                             group_on = 'group',
-                             value_on='peak area',
-                             palette='tab10',
-                             save_to=None):
-        '''
-        绘制带误差线的折线图
-        param:
-            df_long, long table containing id, group and values (value_name)
-            by, column names list (or name) which to calculate mean and std
-            value_on, column name of values (maybe peak area or height, or normalized values) 
-        '''
-
-        # 计算每个 group 和 id 的均值和标准差  
-        summary = df_long.groupby([id_on, group_on]).agg(  
-            Mean=(value_on, 'mean'),  
-            StdDev=(value_on, 'std')  
-        ).reset_index()  
-
-        # 计算误差带  
-        summary['Error'] = summary['StdDev']  
-
-        cmap = plt.colormaps[palette]  # 获取调色板的前两个颜色  
-        line_color = to_hex(cmap(0))  # 第一个颜色  
-        ribbon_color = to_hex(cmap(1))  # 第二个颜色  
-
-        # 绘制折线图  
-        plot = (  
-            ggplot(summary, aes(x=group_on, y='Mean', group=id_on)) +  # 去掉颜色映射  
-            geom_line(color=line_color) +  # 设置线条颜色为调色板的第一个颜色  
-            geom_ribbon(aes(ymin='Mean - Error', ymax='Mean + Error'), alpha=0.1, fill=ribbon_color) +  # 设置误差带颜色  
-            facet_wrap(f'~ {id_on}', scales='free_y') +  
-            labs(title=f'{value_on} by {id_on} with Error Bands', x=group_on, y=value_on) +  
-            theme_bw() +  
-            theme(legend_position='none',
-                  aspect_ratio=1,
-                  panel_grid_major=element_blank(),  # 去掉主要网格线  
-                  panel_grid_minor=element_blank()   # 去掉次要网格线
-                ) +  
-            coord_fixed()  # 确保每个子图保持正方形  
-        )  
-
-        if save_to:
-            plot.save(save_to, transparent=True)
-
-        return plot 
-
-    
-    def lloly(self, df:pd.DataFrame, x:str, y:str, fill:str=None,
-                    palette:str = 'Set1', save_to:str = None):
-        df = df.sort_values(by = x, ascending = True)
-        # 棒棒糖图的纵坐标必须转换为因子，否则绘图不排序
-        df[y] = pd.Categorical(df[y],
-                    categories = df[y].unique(),
-                    ordered = True)
-        if fill:
-            p = ggplot(df, aes(x, y, fill=fill))
-        else:
-            p = ggplot(df, aes(x, y))
-        plot = (p+
-                    geom_segment(aes(x=0, xend=x, y=y, yend=y))+
-                    geom_point(shape='o', size=3, color='black')+
-                    scale_fill_brewer(type='qualitative', palette=palette)+
-                    self.theme)
-        if save_to is not None:
-            plot.save(save_to, transparent=True)
-        return plot    
-
-    def pca(self, 
-            data, 
-            groups: list = None, 
-            labels: list = None,
-            palette: str = 'Set2',
-            add_ellipse: bool = True,
-            save_to: str = None):
-        '''
-        data, matrix-like, rows are samples, columns are features
-        add_ellipse, True to plot the 95% confidence ellipse
-        '''
-        # 1) PCA 降维
-        pca_model = PCA(n_components=2).fit(data)
-        X_pca = pca_model.transform(data)
-        df = pd.DataFrame(X_pca, columns=['PC1', 'PC2'])
-
-        # 2) 处理分组信息
-        if groups is not None:
-            y_cat = pd.Categorical(groups)
-            df['group'] = y_cat
-        else:
-            df['group'] = pd.Categorical(["Group"] * len(df))
-
-        # 3) 基础 ggplot 图层
-        plot = (
-            ggplot(df, aes('PC1', 'PC2', fill='group')) +
-            labs(
-                x=f"PC1: {100 * pca_model.explained_variance_ratio_[0]:.1f} %",
-                y=f"PC2: {100 * pca_model.explained_variance_ratio_[1]:.1f} %"
-            ) +
-            scale_fill_brewer(type='qualitative', palette=palette) +
-            self.theme
-        )
-
-        # 4) 如果需要，添加置信椭圆
-        if add_ellipse:
-            plot = plot + stat_ellipse(geom="polygon", level=0.95, alpha=0.2)
-
-        # 5) 散点层
-        plot = plot + geom_point(alpha=0.6, size=3, shape='o', stroke=0)
-
-        # 6) 标签层（若提供）
-        if labels is not None:
-            df['label'] = labels
-            plot = plot + geom_text(label=df.label, nudge_x=0.1, nudge_y=0.1,
-                                    size=self.fontsize * 0.6)
-
-        # 7) 保存或返回
-        if save_to:
-            plot.save(save_to, transparent=True)
-        return plot  
-
-    def plsda_plt(self, T_scores, y, palette='Set2', save_to=None):
-        """
-        绘制 PLS 结果和决策区域并可选择保存图像。
-        
-        参数：
-        - T_scores: PLS 变换后的得分 (n_samples, n_components) 的数组。
-        - y: 分组标签 (n_samples,) 的数组或列表。
-        - class_names: 分组的类别名称列表。
-        - save_to: 保存图像的文件名，默认为 None（即不保存）。
-        """
-
-        from sklearn.linear_model import LogisticRegression
-
-        class_names = np.unique(y)
-
-        # 得分 DataFrame
-        df_scores = pd.DataFrame(T_scores, columns=["LV1", "LV2"])
-        df_scores["group"] = y
-
-        # 1) 在得分空间上拟合一个简单分类器用于画决策边界
-        clf = LogisticRegression(multi_class="auto", max_iter=1000)
-        clf.fit(df_scores[["LV1", "LV2"]].to_numpy(), y)
-
-        # 2) 创建网格
-        pad = 0.10  # 边界留白比例
-        x_min, x_max = df_scores["LV1"].min(), df_scores["LV1"].max()
-        y_min, y_max = df_scores["LV2"].min(), df_scores["LV2"].max()
-        x_pad = (x_max - x_min) * pad
-        y_pad = (y_max - y_min) * pad
-        x_min, x_max = x_min - x_pad, x_max + x_pad
-        y_min, y_max = y_min - y_pad, y_max + y_pad
-
-        xx, yy = np.meshgrid(
-            np.linspace(x_min, x_max, 400),
-            np.linspace(y_min, y_max, 400)
-        )
-        grid = np.c_[xx.ravel(), yy.ravel()]
-
-        # 3) 预测网格类别（或概率）
-        Z = clf.predict(grid)  # 类别标签
-        Z = Z.reshape(xx.shape)
-
-        # 4) 绘图
-        plt.figure(figsize=(4, 4), dpi=140)
-        ax = plt.gca()
-        palette = sns.color_palette(palette, n_colors=len(class_names))
-        palette_map = {c: col for c, col in zip(class_names, palette)}
-
-        # 决策区域底图（使用较浅的颜色）
-        from matplotlib.colors import ListedColormap
-        idx_map = {c: i for i, c in enumerate(class_names)}
-        Z_idx = np.vectorize(idx_map.get)(Z)
-        cmap_light = ListedColormap([sns.desaturate(palette_map[c], 0.9) for c in class_names])
-
-        ax.contourf(xx, yy, Z_idx, alpha=0.25, cmap=cmap_light, levels=len(class_names))
-
-        # 决策边界线（等概率/分界线）
-        ax.contour(xx, yy, Z_idx, levels=np.arange(len(class_names)), colors="k", alpha=0.2, linewidths=0.8)
-
-        # 叠加样本散点
-        sns.scatterplot(
-            data=df_scores, x="LV1", y="LV2", hue="group",
-            s=30, edgecolor="none", linewidth=1.0,
-            palette=palette, ax=ax
-        )
-
-        # 标注与样式
-        ax.set_xlabel("LV1 (PLS-DA)")
-        ax.set_ylabel("LV2 (PLS-DA)")
-        ax.set_title("PLS-DA scores with decision regions")
-
-        # 方框坐标轴
-        for s in ax.spines.values():
-            s.set_visible(True)
-            s.set_linewidth(1.2)
-
-        ax.set_xlim(x_min, x_max)
-        ax.set_ylim(y_min, y_max)
-        ax.legend(title="Group", frameon=False)
-        plt.tight_layout()
-
-        # 保存图像
-        if save_to is not None:
-            plt.savefig(save_to)
-            print(f"The plot is saved to: {save_to}")
-        
-        plt.show()
-
-
-    def swatch_colors(self, colors):
-        # 设置色块的大小（1.5 cm）  
-        block_size_cm = 2.5
-        block_size_inch = block_size_cm / 2.54  # 转换为英寸（1 cm = 0.393701 in）  
-
-        # 创建图形和轴  
-        fig, ax = plt.subplots(figsize=(len(colors) * block_size_inch, block_size_inch))
-
-        # 在每个色块中显示颜色  
-        for i, color in enumerate(colors):  
-            ax.add_patch(plt.Rectangle((i, 0), 1, 1, color=color))  
-
-        # 设置轴的范围和标签  
-        ax.set_xlim(0, len(colors))  
-        ax.set_ylim(0, 1)  
-        ax.set_xticks([i + 0.5 for i in range(len(colors))])  # 设置 x 轴的刻度位置  
-        ax.set_xticklabels(colors)  # 设置 x 轴的标签为颜色代码  
-        ax.set_yticks([])  # 隐藏 y 轴刻度  
-
-        # 设置标题  
-        plt.title('Color Swatches')  
-        plt.show()
-
-    def swatch_self_colors(self, colors):
-        self.swatch_colors(self.colors[colors])
-
-    def tic_rt_mz(self, df,
-                  x,
-                  y,
-                  size,
-                  color=None,
-                  alpha=0.55,
-                  shape=None,
-                  palette='Nature_2_(5)'):  
-
-        # 计算 y 轴的最小值和最大值  
-        y_min = df[y].min() - 50  
-        y_max = df[y].max() + 100  
-
-        if palette in self.colors:
-            palette = self.colors[palette]
-        
-        if color and shape:
-            plot = (  
-                ggplot(df, aes(x=x, y=y, size=size, color=color, shape=shape)) +  # 点大小依据 log_pkarea, 颜色依据 ionmode   
-                geom_point(alpha=alpha)
-                ) 
-        elif color:
-            plot = (  
-                ggplot(df, aes(x=x, y=y, size=size, color=color)) +  # 点大小依据 log_pkarea, 颜色依据 ionmode   
-                geom_point(alpha=alpha)
-                )  
-        elif shape:
-            df[shape] = df[shape].astype(str)  
-            plot = (  
-                ggplot(df, aes(x=x, y=y, size=size, shape=shape)) +  # 点大小依据 log_pkarea, 颜色依据 ionmode   
-                geom_point(color=self.colors[palette][0]) +
-                scale_shape_manual(values={'False': 'o', 'True': '^'})  # 定义形状 
-                )  
-        else:
-            plot = (  
-                ggplot(df, aes(x=x, y=y, size=size)) +  # 点大小依据 log_pkarea, 颜色依据 ionmode   
-                geom_point(color=self.colors[palette][0])
-                )                                     
-
-        # 绘制散点图  
-        plot = (plot +             
-            labs(x='Retention Time (min)', y='Precursor m/z', color='Ion Mode', size='Log (peak area)') +  
-            ylim(y_min, y_max) +  # 设置纵坐标范围  
-            scale_color_manual(values=palette) +
-            theme_classic()+
-            theme(aspect_ratio=2/3)  # 设置长宽比  
-        )  
-
-        return plot  
-
-
-    def volcano(self, df, x, y, fill,
-                xcut = 1, ycut = 2,
-                title = '',
-                xlab = r'$\mathrm{log_{2} \ Fold Change}$', # 使用LaTeX语法设置x轴标签 
-                ylab = r'-$\log_{10}(\mathrm{p\text{-}value})$',# 使用LaTeX语法设置y轴标签
-                palette='Set1',
-                save_to=None):
-        
-        colors = plt.get_cmap(palette)([0, 1])
-        colors = ['#{:02x}{:02x}{:02x}'.format(int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255))\
-                    for rgba in colors]
-
-        x_limit = max(abs(min(df[x])), abs(max(df[x]))) 
-
-        volcano_plot = (  
-            ggplot(df, aes(x=x, y=y, color=fill)) +  
-            geom_point (alpha=0.5, size=2, shape='o', stroke=0) +  # Set transparency for points  
-            labs(title=f'{title}, Volcano Plot', x=xlab, y=ylab) +    
-            xlim(-x_limit, x_limit) +
-            ylim(0, max(2.5, df[y].max())) +
-            scale_color_manual(values={
-                                        'up': colors[0],
-                                        'dn': colors[1],
-                                         
-                                        'no': '#D3D3D3' # light grey  
-                                    }) +
-            geom_vline(xintercept=-xcut, linetype='dashed', color='grey') +  
-            geom_vline(xintercept= xcut, linetype='dashed', color='grey') + 
-            geom_hline(yintercept= ycut, linetype='dashed', color='grey') +
-            self.theme
-        )  
-
-        if save_to:
-           ggsave(volcano_plot, save_to, dpi=300) 
-
-        return volcano_plot
-
-    def venn(self, data, palette='Set1', alpha=0.65, save_to:str = None):
-        plot = Venn(data,
-                    palette = palette,
-                    fontsize = self.fontsize,
-                    alpha=alpha,
-                    save_to = save_to)
-        return plot
-
-
-
-class Venn:
+    n_rows, n_cols = data.shape
+    figsize = figure_size or (max(5, n_cols * 0.5), max(5, n_rows * 0.5))
+
+    colors = _palette(color_type)
+    if len(colors) >= 5:
+        cmap = sns.blend_palette(colors, as_cmap=True)
+    else:
+        cmap = sns.color_palette(colors, as_cmap=True)
+
+    sns.set_style("white")
+    fig, ax = plt.subplots(figsize=figsize)
+    sns.heatmap(
+        data,
+        cmap=cmap,
+        center=np.median(data.values.flatten()),
+        linewidths=0.05,
+        linecolor="white",
+        square=True,
+        cbar_kws={"shrink": 0.8, "label": cbar_label},
+        ax=ax,
+    )
+    ax.set_title(title, fontsize=16)
+    ax.set_xlabel(xlab, fontsize=12)
+    ax.set_ylabel(ylab, fontsize=12)
+    plt.setp(ax.get_xticklabels(), rotation=90, ha="center")
+    plt.setp(ax.get_yticklabels(), rotation=0, ha="right")
+
+    _save_mpl(fig, save_to)
+    return fig
+
+
+# ═══════════════════════════════════════════════════════════════
+#  5. Line with error band  (plotnine)
+# ═══════════════════════════════════════════════════════════════
+
+def plot_line(
+    df: pd.DataFrame,
+    x: str,
+    y: str,
+    group: Optional[str] = None,
+    color: Optional[str] = None,
+    color_type: str = "qualitative",
+    show_error: bool = True,
+    figure_size: Optional[Tuple[float, float]] = None,
+    save_to: Optional[str] = None,
+):
+    """Line plot with optional error ribbon (plotnine).
+
+    *df* is expected to be a **summary** table with columns *x*, *y*,
+    ``Mean``, ``StdDev`` (or ``Error``).  If you have raw long-format data,
+    pre-aggregate it with ``df.groupby(...).agg(Mean=(..., 'mean'),
+    StdDev=(..., 'std')).reset_index()``.
     """
-    A class to plot Venn diagrams for 2, 3, or 4 sets.
-    Modified from pyvenn: https://github.com/tctianchi/pyvenn
+    colors = _palette(color_type)
+    line_color = colors[0]
+    ribbon_color = colors[1] if len(colors) > 1 else colors[0]
+
+    mapping = aes(x=x, y=y)
+    if group is not None:
+        mapping = aes(x=x, y=y, group=group)
+    if color is not None:
+        mapping = aes(x=x, y=y, group=group or color, color=color)
+
+    p = (
+        ggplot(df, mapping)
+        + geom_line(color=line_color if color is None else None)
+    )
+
+    if color is not None:
+        p = p + scale_color_manual(values=colors)
+
+    if show_error and "Error" in df.columns:
+        p = p + geom_ribbon(
+            aes(ymin=f"{y} - Error", ymax=f"{y} + Error"),
+            alpha=0.15,
+            fill=ribbon_color,
+        )
+
+    p = (
+        p
+        + labs(title=f"{y} by {x}", x=x, y=y)
+        + theme_bw()
+        + theme(
+            legend_position="none",
+            panel_grid_major=element_blank(),
+            panel_grid_minor=element_blank(),
+        )
+        + _get_theme(figure_size=figure_size)
+    )
+
+    _save_plotnine(p, save_to)
+    return p
+
+
+# ═══════════════════════════════════════════════════════════════
+#  6. Lollipop chart  (plotnine)
+# ═══════════════════════════════════════════════════════════════
+
+def plot_lollipop(
+    df: pd.DataFrame,
+    x: str,
+    y: str,
+    fill: Optional[str] = None,
+    color_type: str = "qualitative",
+    figure_size: Optional[Tuple[float, float]] = None,
+    save_to: Optional[str] = None,
+):
+    """Horizontal lollipop chart (plotnine)."""
+    data = df.sort_values(by=x, ascending=True).copy()
+    data[y] = pd.Categorical(data[y], categories=data[y].unique(), ordered=True)
+
+    colors = _palette(color_type)
+
+    if fill is not None and fill in data.columns:
+        p = ggplot(data, aes(x=x, y=y, fill=fill))
+        p = p + scale_fill_manual(values=colors)
+    else:
+        p = ggplot(data, aes(x=x, y=y))
+
+    p = (
+        p
+        + geom_segment(aes(x=0, xend=x, y=y, yend=y))
+        + geom_point(shape="o", size=3, color="black")
+        + _get_theme(figure_size=figure_size)
+    )
+
+    _save_plotnine(p, save_to)
+    return p
+
+
+# ═══════════════════════════════════════════════════════════════
+#  7. PCA score plot  (plotnine)
+# ═══════════════════════════════════════════════════════════════
+
+def plot_pca(
+    df: pd.DataFrame,
+    groups: Optional[Sequence] = None,
+    labels: Optional[Sequence[str]] = None,
+    color_type: str = "qualitative",
+    palette: Optional[str] = None,  # backward-compat alias
+    add_ellipse: bool = True,
+    data_transfer: Optional[str] = "log10",
+    figure_size: Optional[Tuple[float, float]] = None,
+    save_to: Optional[str] = None,
+):
+    if palette is not None:
+        color_type = palette
+    """PCA score scatter plot (plotnine).
+
+    *df* should be a sample-by-feature matrix (rows = samples).
     """
+    if not _HAS_SKLEARN:
+        raise ImportError("scikit-learn is required for PCA plots.")
 
-    def __init__(self, data, fill=['number'], palette='Set1', fontsize=14, alpha=0.65, save_to=None):
-        """
-        Initialize the Venn diagram plotter.
+    if data_transfer == "log10":
+        df_plot = np.log10(df + 1)
+    elif data_transfer == "relative":
+        base = df.max().max()
+        df_plot = (df / base) * 100 if base > 0 else df.copy()
+    elif data_transfer is None or data_transfer == "":
+        df_plot = df.copy()
+    else:
+        raise ValueError(
+            f"Unknown data_transfer: {data_transfer}. "
+            "Use 'log10', 'relative', or None."
+        )
 
-        Parameters:
-            data (dict): A dictionary where keys are set names and values are lists of elements.
-            fill (list): Options for labeling: ["number", "logic", "percent"].
-            palette (str): Color palette name.
-            fontsize (int): Font size for labels.
-            alpha (float): Transparency of the circles.
-            save_to (str): File path to save the plot. If None, plot is displayed.
-        """
-        plt.clf()  # Clear current figure
-        self.fig = plt.figure(0, figsize=(9, 7), dpi=96)
-        self.ax = self.fig.add_subplot(111, aspect='equal')
-        self.ax.set_axis_off()
-        self.ax.set_ylim(bottom=0.0, top=1.0)
-        self.ax.set_xlim(left=0.0, right=1.0)
+    pca_model = PCA(n_components=2).fit(df_plot)
+    scores = pca_model.transform(df_plot)
+    pca_df = pd.DataFrame(scores, columns=["PC1", "PC2"])
 
-        self.palette = ListedColormap(plt.get_cmap(palette).colors)
-        self.fontsize = fontsize
-        self.alpha = alpha
+    if groups is not None:
+        pca_df["group"] = pd.Categorical(groups)
+    else:
+        pca_df["group"] = pd.Categorical(["Group"] * len(pca_df))
 
-        # Validate input data
-        if not isinstance(data, dict):
-            raise ValueError("Input data must be a dictionary.")
-        if len(data) not in (2, 3, 4):
-            raise ValueError("The data length must be 2, 3, or 4.")
+    colors = _palette(color_type)
+    p = (
+        ggplot(pca_df, aes("PC1", "PC2", fill="group"))
+        + labs(
+            x=f"PC1: {100 * pca_model.explained_variance_ratio_[0]:.1f} %",
+            y=f"PC2: {100 * pca_model.explained_variance_ratio_[1]:.1f} %",
+        )
+        + scale_fill_manual(values=colors)
+        + _get_theme(figure_size=figure_size)
+    )
 
-        # Prepare data
-        values = list(data.values())
-        keys = list(data.keys())
-        labels = self._divide(values, fill=fill)
+    if add_ellipse:
+        p = p + stat_ellipse(geom="polygon", level=0.95, alpha=0.2)
 
-        # Draw Venn diagram
-        draw_func = getattr(self, f'_venn{len(data)}')
-        draw_func(labels, keys)
+    p = p + geom_point(alpha=0.6, size=3, shape="o", stroke=0)
 
-        # Save or show the plot
-        if save_to:
-            self.fig.savefig(save_to, transparent=True)
-        else:
-            plt.show()
+    if labels is not None:
+        pca_df["label"] = labels
+        p = p + geom_text(
+            label=pca_df.label, nudge_x=0.1, nudge_y=0.1,
+            size=_DEFAULT_FONTSIZE * 0.6,
+        )
 
-    def _divide(self, data, fill=["number"]):
-        """
-        Generate labels for the Venn diagram regions.
+    _save_plotnine(p, save_to)
+    return p
 
-        Parameters:
-            data (list): List of sets.
-            fill (list): Options for labeling: ["number", "logic", "percent"].
 
-        Returns:
-            dict: A dictionary of labels for each region.
-        """
-        N = len(data)
-        sets_data = [set(data[i]) for i in range(N)]  # Convert lists to sets
-        s_all = set(chain(*data))  # Union of all sets
-        set_collections = {}
+# ═══════════════════════════════════════════════════════════════
+#  8. PLS-DA score plot  (matplotlib)
+# ═══════════════════════════════════════════════════════════════
 
-        for n in range(1, 2**N):
-            key = bin(n).split('0b')[-1].zfill(N)
-            value = s_all
-            sets_for_intersection = [sets_data[i] for i in range(N) if key[i] == '1']
-            sets_for_difference = [sets_data[i] for i in range(N) if key[i] == '0']
-            for s in sets_for_intersection:
-                value = value & s
-            for s in sets_for_difference:
-                value = value - s
-            set_collections[key] = value
+def plot_plsda(
+    T_scores: np.ndarray,
+    y: Sequence,
+    color_type: str = "qualitative",
+    palette: Optional[str] = None,  # backward-compat alias
+    data_transfer: Optional[str] = "log10",
+    figure_size: Tuple[float, float] = (4, 4),
+    save_to: Optional[str] = None,
+):
+    if palette is not None:
+        color_type = palette
+    """PLS-DA score scatter with decision regions (matplotlib)."""
+    if not _HAS_SKLEARN:
+        raise ImportError("scikit-learn is required for PLS-DA plots.")
 
-        labels = {k: "" for k in set_collections}
-        if "logic" in fill:
-            for k in set_collections:
-                labels[k] = k + ": "
-        if "number" in fill:
-            for k in set_collections:
-                labels[k] += str(len(set_collections[k]))
-        if "percent" in fill:
-            data_size = len(s_all)
-            for k in set_collections:
-                labels[k] += "(%.1f%%)" % (100.0 * len(set_collections[k]) / data_size)
-        return labels
+    if data_transfer == "log10":
+        # signed log10 to handle both positive and negative scores safely
+        T_plot = np.sign(T_scores) * np.log10(np.abs(T_scores) + 1)
+    elif data_transfer == "relative":
+        base = np.max(np.abs(T_scores))
+        T_plot = (T_scores / base) * 100 if base > 0 else T_scores.copy()
+    elif data_transfer is None or data_transfer == "":
+        T_plot = T_scores.copy()
+    else:
+        raise ValueError(
+            f"Unknown data_transfer: {data_transfer}. "
+            "Use 'log10', 'relative', or None."
+        )
 
-    def _draw_ellipse(self, xy, width, height, angle=0, color_index=0):
-        """Draw an ellipse on the plot."""
-        self.ax.add_patch(patches.Ellipse(
+    class_names = np.unique(y)
+    df_scores = pd.DataFrame(T_plot, columns=["LV1", "LV2"])
+    df_scores["group"] = y
+
+    clf = LogisticRegression(max_iter=1000)
+    clf.fit(df_scores[["LV1", "LV2"]].to_numpy(), y)
+
+    pad = 0.10
+    x_min, x_max = df_scores["LV1"].min(), df_scores["LV1"].max()
+    y_min, y_max = df_scores["LV2"].min(), df_scores["LV2"].max()
+    x_pad = (x_max - x_min) * pad
+    y_pad = (y_max - y_min) * pad
+    x_min, x_max = x_min - x_pad, x_max + x_pad
+    y_min, y_max = y_min - y_pad, y_max + y_pad
+
+    xx, yy = np.meshgrid(
+        np.linspace(x_min, x_max, 400),
+        np.linspace(y_min, y_max, 400),
+    )
+    grid = np.c_[xx.ravel(), yy.ravel()]
+    Z = clf.predict(grid).reshape(xx.shape)
+
+    fig, ax = plt.subplots(figsize=figure_size, dpi=_DEFAULT_DPI)
+    colors = _palette(color_type)
+    palette_map = {c: colors[i % len(colors)] for i, c in enumerate(class_names)}
+    idx_map = {c: i for i, c in enumerate(class_names)}
+    Z_idx = np.vectorize(idx_map.get)(Z)
+    cmap_light = ListedColormap(
+        [sns.desaturate(palette_map[c], 0.9) for c in class_names]
+    )
+
+    ax.contourf(xx, yy, Z_idx, alpha=0.25, cmap=cmap_light, levels=len(class_names))
+    ax.contour(
+        xx, yy, Z_idx, levels=np.arange(len(class_names)),
+        colors="k", alpha=0.2, linewidths=0.8,
+    )
+
+    sns.scatterplot(
+        data=df_scores, x="LV1", y="LV2", hue="group",
+        s=30, edgecolor="none", linewidth=1.0,
+        palette=[palette_map[c] for c in class_names],
+        ax=ax,
+    )
+
+    ax.set_xlabel("LV1 (PLS-DA)")
+    ax.set_ylabel("LV2 (PLS-DA)")
+    ax.set_title("PLS-DA scores with decision regions")
+    for s in ax.spines.values():
+        s.set_visible(True)
+        s.set_linewidth(1.2)
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    ax.legend(title="Group", frameon=False)
+    plt.tight_layout()
+
+    _save_mpl(fig, save_to)
+    return fig
+
+
+# ═══════════════════════════════════════════════════════════════
+#  9. Volcano plot  (plotnine)
+# ═══════════════════════════════════════════════════════════════
+
+def plot_volcano(
+    df: pd.DataFrame,
+    x: str,
+    y: str,
+    fill: str,
+    xcut: float = 1.0,
+    ycut: float = 2.0,
+    title: str = "",
+    color_type: str = "diverging",
+    xlab: Optional[str] = None,
+    ylab: Optional[str] = None,
+    palette: Optional[str] = None,  # backward-compat alias
+    figure_size: Optional[Tuple[float, float]] = None,
+    save_to: Optional[str] = None,
+):
+    if palette is not None:
+        color_type = palette
+    """Volcano plot (plotnine)."""
+    colors = _palette(color_type)
+    # Pick two extremes + neutral grey
+    if len(colors) >= 2:
+        up_color = colors[0]
+        dn_color = colors[-1]
+    else:
+        up_color = dn_color = colors[0]
+    no_color = "#D3D3D3"
+
+    # Guard against all-NaN columns (e.g. zero-variance data)
+    x_vals = df[x].replace([np.inf, -np.inf], np.nan).dropna()
+    x_limit = max(abs(x_vals.min()), abs(x_vals.max())) if not x_vals.empty else 1.0
+
+    y_vals = df[y].replace([np.inf, -np.inf], np.nan).dropna()
+    y_max = max(2.5, y_vals.max()) if not y_vals.empty else 2.5
+
+    p = (
+        ggplot(df, aes(x=x, y=y, color=fill))
+        + geom_point(alpha=0.5, size=2, shape="o", stroke=0)
+        + labs(
+            title=f"{title}, Volcano Plot" if title else "Volcano Plot",
+            x=xlab if xlab is not None else x,
+            y=ylab if ylab is not None else y,
+        )
+        + xlim(-x_limit, x_limit)
+        + ylim(0, y_max)
+        + scale_color_manual(
+            values={"up": up_color, "dn": dn_color, "no": no_color}
+        )
+        + geom_vline(xintercept=-xcut, linetype="dashed", color="grey")
+        + geom_vline(xintercept=xcut, linetype="dashed", color="grey")
+        + geom_hline(yintercept=ycut, linetype="dashed", color="grey")
+        + _get_theme(figure_size=figure_size)
+    )
+
+    _save_plotnine(p, save_to)
+    return p
+
+
+# ═══════════════════════════════════════════════════════════════
+#  10. Scatter / TIC-RT-mz style  (plotnine)
+# ═══════════════════════════════════════════════════════════════
+
+def plot_scatter(
+    df: pd.DataFrame,
+    x: str,
+    y: str,
+    size: Optional[str] = None,
+    color: Optional[str] = None,
+    shape: Optional[str] = None,
+    alpha: float = 0.55,
+    color_type: str = "qualitative",
+    figure_size: Optional[Tuple[float, float]] = None,
+    save_to: Optional[str] = None,
+):
+    """Generic scatter plot (plotnine)."""
+    colors = _palette(color_type)
+
+    aes_map = {"x": x, "y": y}
+    if size is not None:
+        aes_map["size"] = size
+    if color is not None:
+        aes_map["color"] = color
+    if shape is not None:
+        aes_map["shape"] = shape
+
+    p = ggplot(df, aes(**aes_map)) + geom_point(alpha=alpha)
+
+    if color is not None:
+        p = p + scale_color_manual(values=colors)
+    else:
+        p = p + geom_point(color=colors[0], alpha=alpha)
+
+    if shape is not None:
+        df[shape] = df[shape].astype(str)
+        # Provide a default manual shape mapping if the user didn't supply one
+        # (plotnine will auto-pick shapes otherwise)
+
+    p = (
+        p
+        + labs(x=x, y=y)
+        + theme_classic()
+        + _get_theme(figure_size=figure_size)
+    )
+
+    _save_plotnine(p, save_to)
+    return p
+
+
+# ═══════════════════════════════════════════════════════════════
+#  11. Venn diagram  (matplotlib)
+# ═══════════════════════════════════════════════════════════════
+
+def plot_venn(
+    data: Dict[str, Sequence],
+    fill_mode: Optional[List[str]] = None,
+    color_type: str = "qualitative",
+    palette: Optional[str] = None,  # backward-compat alias
+    alpha: float = 0.65,
+    fontsize: Optional[int] = None,
+    figure_size: Optional[Tuple[float, float]] = None,
+    save_to: Optional[str] = None,
+):
+    if palette is not None:
+        color_type = palette
+    """Draw a 2-, 3- or 4-set Venn diagram (matplotlib).
+
+    The number of circles / ellipses is inferred automatically from
+    ``len(data)`` (must be 2, 3 or 4).
+
+    Parameters
+    ----------
+    data : dict
+        Mapping from set names to element sequences.
+    fill_mode : list of str, optional
+        Label modes, e.g. ``["number"]``, ``["logic", "percent"]``.
+    """
+    if fill_mode is None:
+        fill_mode = ["number"]
+    if not isinstance(data, dict):
+        raise ValueError("Input data must be a dictionary.")
+    n_sets = len(data)
+    if n_sets not in (2, 3, 4):
+        raise ValueError("Venn diagram supports 2, 3 or 4 sets only.")
+
+    colors = _palette(color_type)
+    cmap = ListedColormap(colors)
+    fs = fontsize or _DEFAULT_FONTSIZE
+
+    fig, ax = plt.subplots(figsize=figure_size or (9, 7), dpi=_DEFAULT_DPI)
+    ax.set_aspect("equal")
+    ax.axis("off")
+    ax.set_ylim(0.0, 1.0)
+    ax.set_xlim(0.0, 1.0)
+
+    values = list(data.values())
+    keys = list(data.keys())
+    labels = _venn_divide(values, fill=fill_mode)
+
+    draw_func = globals()[f"_venn_draw{n_sets}"]
+    draw_func(ax, labels, keys, cmap, alpha, fs)
+
+    if save_to:
+        fig.savefig(save_to, transparent=True)
+    return fig
+
+
+def _venn_divide(data, fill=None):
+    """Generate region labels for a Venn diagram."""
+    if fill is None:
+        fill = ["number"]
+    N = len(data)
+    sets_data = [set(data[i]) for i in range(N)]
+    s_all = set(chain(*data))
+    set_collections = {}
+
+    for n in range(1, 2 ** N):
+        key = bin(n).split("0b")[-1].zfill(N)
+        value = s_all
+        inter = [sets_data[i] for i in range(N) if key[i] == "1"]
+        diff = [sets_data[i] for i in range(N) if key[i] == "0"]
+        for s in inter:
+            value = value & s
+        for s in diff:
+            value = value - s
+        set_collections[key] = value
+
+    labels = {k: "" for k in set_collections}
+    if "logic" in fill:
+        for k in set_collections:
+            labels[k] = k + ": "
+    if "number" in fill:
+        for k in set_collections:
+            labels[k] += str(len(set_collections[k]))
+    if "percent" in fill:
+        total = len(s_all)
+        for k in set_collections:
+            labels[k] += "(%.1f%%)" % (100.0 * len(set_collections[k]) / total)
+    return labels
+
+
+def _venn_draw_ellipse(ax, xy, width, height, angle, color, alpha):
+    ax.add_patch(
+        patches.Ellipse(
             xy=xy, width=width, height=height, angle=angle,
-            alpha=self.alpha, color=self.palette(color_index)
-        ))
+            alpha=alpha, color=color,
+        )
+    )
 
-    def _draw_text(self, x, y, text, ha='center', va='center'):
-        """Draw text on the plot."""
-        self.ax.text(x, y, text, fontsize=self.fontsize, ha=ha, va=va)
 
-    def _venn2(self, labels, names):
-        """Draw a 2-set Venn diagram."""
-        self.ax.set_ylim(bottom=0.0, top=0.7)
-        # Draw ellipses
-        self._draw_ellipse((0.375, 0.3), 0.5, 0.5, color_index=0)
-        self._draw_ellipse((0.625, 0.3), 0.5, 0.5, color_index=1)
-        # Draw labels
-        self._draw_text(0.74, 0.30, labels.get('01', ''))
-        self._draw_text(0.26, 0.30, labels.get('10', ''))
-        self._draw_text(0.50, 0.30, labels.get('11', ''))
-        self._draw_text(0.20, 0.56, names[0])
-        self._draw_text(0.80, 0.56, names[1])
+def _venn_draw_text(ax, x, y, text, fs, ha="center", va="center"):
+    ax.text(x, y, text, fontsize=fs, ha=ha, va=va)
 
-    def _venn3(self, labels, names):
-        """Draw a 3-set Venn diagram."""
-        # Draw ellipses
-        self._draw_ellipse((0.333, 0.633), 0.55, 0.55, color_index=0)
-        self._draw_ellipse((0.666, 0.633), 0.55, 0.55, color_index=1)
-        self._draw_ellipse((0.500, 0.310), 0.55, 0.55, color_index=2)
-        # Draw labels
-        self._draw_text(0.50, 0.27, labels.get('001', ''))
-        self._draw_text(0.73, 0.65, labels.get('010', ''))
-        self._draw_text(0.61, 0.46, labels.get('011', ''))
-        self._draw_text(0.27, 0.65, labels.get('100', ''))
-        self._draw_text(0.39, 0.46, labels.get('101', ''))
-        self._draw_text(0.50, 0.65, labels.get('110', ''))
-        self._draw_text(0.50, 0.51, labels.get('111', ''))
-        self._draw_text(0.15, 0.87, names[0])
-        self._draw_text(0.85, 0.87, names[1])
-        self._draw_text(0.50, 0.02, names[2])
 
-    def _venn4(self, labels, names):
-        """Draw a 4-set Venn diagram."""
-        o = 0.500  # Center of the plot
-        dx = 0.18
-        dy = 0.08
-        # Draw ellipses
-        self._draw_ellipse((o - dx, o - dy), 4 * dx, 2 * dx, angle=135, color_index=0)
-        self._draw_ellipse((o, o), 4 * dx, 2 * dx, angle=135, color_index=1)
-        self._draw_ellipse((o, o), 4 * dx, 2 * dx, angle=45, color_index=2)
-        self._draw_ellipse((o + dx, o - dy), 4 * dx, 2 * dx, angle=45, color_index=3)
-        # Draw labels
-        label_positions = [
-            (o + dx * 2.00, o + dy * 0.50, labels.get('0001', '')),
-            (o + dx * 0.75, o + dy * 2.50, labels.get('0010', '')),
-            (o + dx * 1.25, o + dy * 1.25, labels.get('0011', '')),
-            (o - dx * 0.75, o + dy * 2.50, labels.get('0100', '')),
-            (o + dx, o - dy * 2.00, labels.get('0101', '')),
-            (o, o + dy * 1.25, labels.get('0110', '')),
-            (o + dx * 0.75, o - dy * 0.25, labels.get('0111', '')),
-            (o - dx * 2.00, o + dy * 0.50, labels.get('1000', '')),
-            (o, o - dy * 3.75, labels.get('1001', '')),
-            (o - dx, o - dy * 2.00, labels.get('1010', '')),
-            (o - dx * 0.25, o - dy * 2.75, labels.get('1011', '')),
-            (o - dx * 1.25, o + dy * 1.25, labels.get('1100', '')),
-            (o + dx * 0.25, o - dy * 2.75, labels.get('1101', '')),
-            (o - dx * 0.75, o - dy * 0.25, labels.get('1110', '')),
-            (o, o - dy * 1.75, labels.get('1111', '')),
-            (o - dx * 2.25, o + dy * 2.75, names[0]),
-            (o - dx * 1.00, o + dy * 3.75, names[1]),
-            (o + dx * 1.00, o + dy * 3.75, names[2]),
-            (o + dx * 2.25, o + dy * 2.75, names[3])
-        ]
-        for x, y, text in label_positions:
-            self._draw_text(x, y, text)
-    
-    def save(self, fname, dpi=300, transparent=True):
-        return self.fig.savefig(fname=fname, dpi=dpi, transparent=transparent)
+def _venn_draw2(ax, labels, names, cmap, alpha, fs):
+    ax.set_ylim(0.0, 0.7)
+    _venn_draw_ellipse(ax, (0.375, 0.3), 0.5, 0.5, 0, cmap(0), alpha)
+    _venn_draw_ellipse(ax, (0.625, 0.3), 0.5, 0.5, 0, cmap(1), alpha)
+    _venn_draw_text(ax, 0.74, 0.30, labels.get("01", ""), fs)
+    _venn_draw_text(ax, 0.26, 0.30, labels.get("10", ""), fs)
+    _venn_draw_text(ax, 0.50, 0.30, labels.get("11", ""), fs)
+    _venn_draw_text(ax, 0.20, 0.56, names[0], fs)
+    _venn_draw_text(ax, 0.80, 0.56, names[1], fs)
+
+
+def _venn_draw3(ax, labels, names, cmap, alpha, fs):
+    _venn_draw_ellipse(ax, (0.333, 0.633), 0.55, 0.55, 0, cmap(0), alpha)
+    _venn_draw_ellipse(ax, (0.666, 0.633), 0.55, 0.55, 0, cmap(1), alpha)
+    _venn_draw_ellipse(ax, (0.500, 0.310), 0.55, 0.55, 0, cmap(2), alpha)
+    _venn_draw_text(ax, 0.50, 0.27, labels.get("001", ""), fs)
+    _venn_draw_text(ax, 0.73, 0.65, labels.get("010", ""), fs)
+    _venn_draw_text(ax, 0.61, 0.46, labels.get("011", ""), fs)
+    _venn_draw_text(ax, 0.27, 0.65, labels.get("100", ""), fs)
+    _venn_draw_text(ax, 0.39, 0.46, labels.get("101", ""), fs)
+    _venn_draw_text(ax, 0.50, 0.65, labels.get("110", ""), fs)
+    _venn_draw_text(ax, 0.50, 0.51, labels.get("111", ""), fs)
+    _venn_draw_text(ax, 0.15, 0.87, names[0], fs)
+    _venn_draw_text(ax, 0.85, 0.87, names[1], fs)
+    _venn_draw_text(ax, 0.50, 0.02, names[2], fs)
+
+
+def _venn_draw4(ax, labels, names, cmap, alpha, fs):
+    o, dx, dy = 0.500, 0.18, 0.08
+    _venn_draw_ellipse(ax, (o - dx, o - dy), 4 * dx, 2 * dx, 135, cmap(0), alpha)
+    _venn_draw_ellipse(ax, (o, o), 4 * dx, 2 * dx, 135, cmap(1), alpha)
+    _venn_draw_ellipse(ax, (o, o), 4 * dx, 2 * dx, 45, cmap(2), alpha)
+    _venn_draw_ellipse(ax, (o + dx, o - dy), 4 * dx, 2 * dx, 45, cmap(3), alpha)
+    positions = [
+        (o + dx * 2.00, o + dy * 0.50, labels.get("0001", "")),
+        (o + dx * 0.75, o + dy * 2.50, labels.get("0010", "")),
+        (o + dx * 1.25, o + dy * 1.25, labels.get("0011", "")),
+        (o - dx * 0.75, o + dy * 2.50, labels.get("0100", "")),
+        (o + dx, o - dy * 2.00, labels.get("0101", "")),
+        (o, o + dy * 1.25, labels.get("0110", "")),
+        (o + dx * 0.75, o - dy * 0.25, labels.get("0111", "")),
+        (o - dx * 2.00, o + dy * 0.50, labels.get("1000", "")),
+        (o, o - dy * 3.75, labels.get("1001", "")),
+        (o - dx, o - dy * 2.00, labels.get("1010", "")),
+        (o - dx * 0.25, o - dy * 2.75, labels.get("1011", "")),
+        (o - dx * 1.25, o + dy * 1.25, labels.get("1100", "")),
+        (o + dx * 0.25, o - dy * 2.75, labels.get("1101", "")),
+        (o - dx * 0.75, o - dy * 0.25, labels.get("1110", "")),
+        (o, o - dy * 1.75, labels.get("1111", "")),
+        (o - dx * 2.25, o + dy * 2.75, names[0]),
+        (o - dx * 1.00, o + dy * 3.75, names[1]),
+        (o + dx * 1.00, o + dy * 3.75, names[2]),
+        (o + dx * 2.25, o + dy * 2.75, names[3]),
+    ]
+    for x, y, text in positions:
+        _venn_draw_text(ax, x, y, text, fs)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  12. Colour swatch  (matplotlib)
+# ═══════════════════════════════════════════════════════════════
+
+def plot_swatch(
+    colors: Optional[Sequence[str]] = None,
+    color_type: str = "qualitative",
+    figure_size: Optional[Tuple[float, float]] = None,
+    save_to: Optional[str] = None,
+):
+    """Draw colour swatches (matplotlib)."""
+    if colors is None:
+        colors = _palette(color_type)
+    colors = list(colors)
+    block = 2.5 / 2.54  # 2.5 cm in inch
+    fig, ax = plt.subplots(figsize=figure_size or (len(colors) * block, block))
+    for i, c in enumerate(colors):
+        ax.add_patch(plt.Rectangle((i, 0), 1, 1, color=c))
+    ax.set_xlim(0, len(colors))
+    ax.set_ylim(0, 1)
+    ax.set_xticks([i + 0.5 for i in range(len(colors))])
+    ax.set_xticklabels(colors, rotation=45, ha="right", fontsize=8)
+    ax.set_yticks([])
+    ax.set_title("Color Swatches")
+    plt.tight_layout()
+    _save_mpl(fig, save_to)
+    return fig
+
+
+# ═══════════════════════════════════════════════════════════════
+#  13. Chemical network  (igraph + rdkit)
+# ═══════════════════════════════════════════════════════════════
+
+def plot_chemicals_net(
+    smiles_list: List[str],
+    threshold: float = 0.6,
+    fp_type: str = "morgan",
+    radius: int = 2,
+    n_bits: int = 2048,
+    use_sanitization: bool = True,
+    save_to: Optional[str] = None,
+):
+    """Build a chemical-similarity network from SMILES (igraph).
+
+    Returns the igraph plot object; also writes to *save_to* when given.
+    """
+    if not _HAS_RDKIT:
+        raise ImportError("rdkit is required for chemical network plots.")
+    if not _HAS_IGRAPH:
+        raise ImportError("igraph is required for chemical network plots.")
+    if not smiles_list:
+        raise ValueError("smiles_list cannot be empty")
+
+    mols = []
+    fps = []
+    if fp_type.lower() == "morgan":
+        morgan_gen = rdFingerprintGenerator.GetMorganGenerator(
+            radius=radius, fpSize=n_bits
+        )
+    for s in smiles_list:
+        mol = Chem.MolFromSmiles(s, sanitize=use_sanitization)
+        if mol is None:
+            raise ValueError(f"Cannot parse SMILES: {s}")
+        if fp_type.lower() == "morgan":
+            fp = morgan_gen.GetFingerprint(mol)
+        elif fp_type.lower() in {"maccs", "rdkitmaccs"}:
+            from rdkit.Chem import MACCSkeys  # type: ignore[import-untyped]
+            fp = MACCSkeys.GenMACCSKeys(mol)
+        else:
+            raise ValueError("fp_type must be 'morgan' or 'maccs'")
+        mols.append(mol)
+        fps.append(fp)
+
+    n = len(fps)
+    sim_matrix = np.zeros((n, n), dtype=float)
+    for i in range(n):
+        sim_matrix[i, i] = 1.0
+        for j in range(i + 1, n):
+            sim = DataStructs.TanimotoSimilarity(fps[i], fps[j])
+            sim_matrix[i, j] = sim_matrix[j, i] = sim
+
+    g = Graph()
+    g.add_vertices(n)
+    g.vs["label"] = [str(i) for i in range(n)]
+    g.vs["smiles"] = smiles_list
+
+    edges, weights = [], []
+    for i in range(n):
+        for j in range(i + 1, n):
+            if sim_matrix[i, j] >= threshold:
+                edges.append((i, j))
+                weights.append(float(sim_matrix[i, j]))
+    if edges:
+        g.add_edges(edges)
+        g.es["weight"] = weights
+
+    layout = g.layout("fr")
+    img = igplot(
+        g,
+        target=save_to,
+        layout=layout,
+        vertex_size=12,
+        vertex_label=g.vs["label"],
+        vertex_label_size=8,
+        vertex_color="#d7191c",
+        edge_color="grey",
+        background=None,
+    )
+    return img
+
+
+# ═══════════════════════════════════════════════════════════════
+#  14. Molecule grid  (rdkit)
+# ═══════════════════════════════════════════════════════════════
+
+def plot_molecules_grid(
+    smiles_list: List[str],
+    cols: int = 4,
+    mols_per_row: Optional[int] = None,
+    sub_img_size: Tuple[int, int] = (250, 250),
+    legends: bool = False,
+    save_to: Optional[str] = None,
+):
+    """Render a grid of 2-D molecular structures (rdkit).
+
+    Returns a PIL Image; if *save_to* ends with ``.svg`` the SVG string is
+    written to disk.
+    """
+    if not _HAS_RDKIT:
+        raise ImportError("rdkit is required for molecule grid plots.")
+    if not isinstance(smiles_list, list):
+        raise TypeError("smiles_list must be a list")
+    if mols_per_row is None:
+        mols_per_row = cols
+    if mols_per_row <= 0:
+        raise ValueError("cols / mols_per_row must be positive")
+
+    mols = []
+    legends_list = []
+    for i, smi in enumerate(smiles_list):
+        if smi is None:
+            mol = None
+        else:
+            mol = Chem.MolFromSmiles(str(smi).strip())
+        if mol is None:
+            mol = Chem.MolFromSmiles("")
+        mols.append(mol)
+        legends_list.append(str(i))
+
+    img = Draw.MolsToGridImage(
+        mols,
+        molsPerRow=mols_per_row,
+        subImgSize=sub_img_size,
+        legends=legends_list if legends else None,
+        useSVG=True,
+    )
+    if save_to:
+        with open(save_to, "w", encoding="utf-8") as f:
+            f.write(img.data)  # type: ignore[attr-defined]
+    return img
+
+
+# ═══════════════════════════════════════════════════════════════
+#  15. Centroid spectrum  (matplotlib)
+# ═══════════════════════════════════════════════════════════════
+
+def plot_centroid_spectrum(
+    peaks: Sequence[Sequence[float]],
+    title: Optional[str] = None,
+    figsize: Tuple[float, float] = (10, 4),
+    color: Optional[str] = None,
+    line_width: float = 1.6,
+    normalize: bool = True,
+    xlim: Optional[Tuple[float, float]] = None,
+    ylim: Optional[Tuple[float, float]] = None,
+    show: bool = True,
+    save_to: Optional[str] = None,
+    show_mz_labels: bool = True,
+    mz_label_fmt: str = "{:.4f}",
+    mz_label_fontsize: int = 10,
+    mz_label_offset_ratio: float = 0.001,
+    mz_label_horizontal_offset: float = 0.0,
+    mz_label_intensity_threshold: float = 0.1,
+):
+    """Draw a centroid mass spectrum (matplotlib stem plot)."""
+    if color is None:
+        color = _palette("qualitative")[0]
+
+    if peaks is None or len(peaks) == 0:
+        raise ValueError("peaks cannot be empty")
+    arr = np.asarray(peaks, dtype=float)
+    if arr.ndim != 2 or arr.shape[1] < 2:
+        raise ValueError("peaks must be [[mz, intensity], ...]")
+
+    mz = arr[:, 0]
+    intensity = arr[:, 1]
+    if normalize:
+        max_i = float(np.max(intensity)) if len(intensity) else 0.0
+        if max_i > 0:
+            intensity = intensity / max_i
+
+    if xlim is None:
+        xmin, xmax = float(np.min(mz)), float(np.max(mz))
+        dx = xmax - xmin
+        pad = dx * 0.02 if dx > 0 else 1.0
+        xlim_eff = (xmin - pad, xmax + pad)
+    else:
+        xlim_eff = xlim
+    if ylim is None:
+        ymin = float(np.min(intensity)) if len(intensity) else 0.0
+        ymax = float(np.max(intensity)) if len(intensity) else 1.0
+        pad = (ymax - ymin) * 0.05 if ymax > ymin else 0.1
+        ylim_eff = (ymin - pad, ymax + pad)
+    else:
+        ylim_eff = ylim
+
+    xlim_eff = (min(xlim_eff[0], 0.0), max(xlim_eff[1], 0.0))
+    ylim_eff = (min(ylim_eff[0], 0.0), max(ylim_eff[1], 0.0))
+
+    fig, ax = plt.subplots(figsize=figsize)
+    _, stemlines, _ = ax.stem(
+        mz, intensity, linefmt=color, markerfmt=" ", basefmt=" ", bottom=0.0
+    )
+    try:
+        stemlines.set_linewidth(line_width)
+    except Exception:
+        pass
+
+    if show_mz_labels and len(intensity) > 0:
+        threshold = mz_label_intensity_threshold * float(np.max(intensity))
+        y_range = float(np.max(intensity) - np.min(intensity))
+        y_offset = y_range * mz_label_offset_ratio if y_range > 0 else 0.01
+        for xi, yi in zip(mz, intensity):
+            if xi < xlim_eff[0] or xi > xlim_eff[1]:
+                continue
+            if yi < threshold:
+                continue
+            ax.text(
+                xi + mz_label_horizontal_offset,
+                yi + y_offset,
+                mz_label_fmt.format(xi),
+                ha="center", va="bottom", rotation=0,
+                fontsize=mz_label_fontsize, color=color,
+            )
+
+    ax.set_xlim(xlim_eff)
+    ax.set_ylim(ylim_eff)
+    ax.spines["left"].set_position(("data", 0.0))
+    ax.spines["bottom"].set_position(("data", 0.0))
+    ax.set_xlabel("m/z")
+    ax.set_ylabel("Intensity" if not normalize else "Normalized Intensity")
+    if title:
+        ax.set_title(title)
+    plt.tight_layout()
+
+    if save_to is not None:
+        plt.savefig(save_to, dpi=300, bbox_inches="tight")
+    if show:
+        plt.show()
+    else:
+        plt.close()
+    return fig
+
+
+# ═══════════════════════════════════════════════════════════════
+#  Quick smoke-test when executed directly
+# ═══════════════════════════════════════════════════════════════
+if __name__ == "__main__":
+    print("mzpy.plot smoke test")
+    print("-" * 40)
+    print("Active colour scheme:")
+    for k, v in get_color_scheme().items():
+        print(f"  {k:12s}: {v[:3]} ...")
+    print("\nTry:  from mzpy.plot import plot_bar, plot_venn, ...")

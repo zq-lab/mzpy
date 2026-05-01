@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Enrichment – mzpy{% endblock %}
+{% block subtitle %}7. FELLA Enrichment{% endblock %}
+
+{% block content %}
+<div class="tile tile-parchment">
+  <div class="container" style="max-width: 720px;">
+    <h2>FELLA Enrichment Analysis</h2>
+    <p style="color: var(--muted-ink-80);">
+      Input compounds: <strong>{{ kegg_count or 0 }}</strong> KEGG IDs selected.
+    </p>
+
+    <form method="post" style="margin-top: 24px;">
+      <div class="form-group">
+        <label>Organism code</label>
+        <input type="text" name="organism" value="{{ organism or 'hsa' }}" placeholder="e.g. hsa, mmu, dre">
+      </div>
+      <div class="form-group">
+        <label>HDF5 database path</label>
+        <input type="text" name="h5_path" value="{{ h5_path or '' }}" placeholder="/path/to/organism.h5" required>
+      </div>
+      <div class="form-group">
+        <label>Method</label>
+        <select name="method">
+          <option value="diffusion" {% if method == 'diffusion' %}selected{% endif %}>diffusion</option>
+          <option value="pagerank" {% if method == 'pagerank' %}selected{% endif %}>pagerank</option>
+          <option value="hypergeom" {% if method == 'hypergeom' %}selected{% endif %}>hypergeom</option>
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary">Run Enrichment</button>
+    </form>
+  </div>
+</div>
+
+{% if img_url %}
+<div class="tile tile-light" style="text-align: center;">
+  <h2>Enrichment Network</h2>
+  <img src="{{ img_url }}" alt="FELLA network" class="plot-img" style="margin-top: 24px;">
+</div>
+
+{% if result_table %}
+<div class="tile tile-parchment">
+  <div class="container">
+    <h2>Results Table</h2>
+    <div style="overflow-x: auto;">
+      {{ result_table | safe }}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if enzyme_table %}
+<div class="tile tile-light">
+  <div class="container">
+    <h2>Enzyme Table</h2>
+    <div style="overflow-x: auto;">
+      {{ enzyme_table | safe }}
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

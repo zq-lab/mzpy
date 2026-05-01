@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}Volcano Plot – mzpy{% endblock %}
+{% block subtitle %}5. Volcano Plot{% endblock %}
+
+{% block content %}
+<div class="tile tile-parchment">
+  <div class="container" style="max-width: 900px;">
+    <h2>Add Comparison</h2>
+    <form method="post" style="margin-top: 16px;">
+      <input type="hidden" name="action" value="add">
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+        <div class="form-group">
+          <label>Comparison Name</label>
+          <input type="text" name="name" placeholder="e.g. G1 vs G0" required>
+        </div>
+        <div class="form-group">
+          <label>Statistical Method</label>
+          <select name="method" id="method-select" onchange="toggleMethodForm()">
+            <option value="ttest">t-test + Fold Change</option>
+            <option value="vip">VIP (from PLSDA)</option>
+            <option value="spearman">Spearman (3 ordered groups)</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- t-test / VIP shared fields -->
+      <div id="twogroup-fields" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+        <div class="form-group">
+          <label>Numerator</label>
+          <select name="g1">
+            {% for g in group_names %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Denominator</label>
+          <select name="g2">
+            {% for g in group_names %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <!-- Spearman fields -->
+      <div id="spearman-fields" style="display: none; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+        <div class="form-group">
+          <label>Group 1 (lowest)</label>
+          <select name="sg1">
+            {% for g in group_names %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Group 2</label>
+          <select name="sg2">
+            {% for g in group_names %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Group 3 (highest)</label>
+          <select name="sg3">
+            {% for g in group_names %}<option value="{{ g }}">{{ g }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+        <div class="form-group">
+          <label id="xcut-label">log2FC cutoff</label>
+          <input type="number" name="xcut" value="1.0" step="0.1">
+        </div>
+        <div class="form-group">
+          <label id="ycut-label">-log10(p) cutoff</label>
+          <input type="number" name="ycut" value="2.0" step="0.1">
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary" style="margin-top: 8px;">Run Analysis</button>
+    </form>
+  </div>
+</div>
+
+{% if comparisons %}
+<div class="tile tile-light">
+  <div class="container" style="max-width: 1100px;">
+    <h2 style="margin-bottom: 24px;">Comparisons</h2>
+    {% for cmp in comparisons %}
+    <div class="comparison-card">
+      <div class="comparison-header">
+        <div>
+          <span class="name">{{ cmp.name }}</span>
+          <span class="params">
+            {% if cmp.method == 'spearman' %}
+              Spearman | {{ cmp.spearman_groups | join(' → ') }} | r≥{{ cmp.xcut }} | p<{{ "%.0e" | format(10 ** (-cmp.ycut)) }}
+            {% elif cmp.method == 'vip' %}
+              VIP | {{ cmp.numerator }} / {{ cmp.denominator }} | FC≥{{ cmp.xcut }} | VIP≥{{ cmp.ycut }}
+            {% else %}
+              t-test | {{ cmp.numerator }} / {{ cmp.denominator }} | FC≥{{ cmp.xcut }} | p<{{ "%.0e" | format(10 ** (-cmp.ycut)) }}
+            {% endif %}
+          </span>
+        </div>
+        <form method="post" style="margin: 0;">
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="cid" value="{{ cmp.id }}">
+          <button type="submit" class="btn btn-pearl" style="font-size: 12px; padding: 6px 12px;">Remove</button>
+        </form>
+      </div>
+      <div class="comparison-body">
+        <div class="comparison-stats">
+          <span class="stat">Up: <strong>{{ cmp.up_count }}</strong></span>
+          <span class="stat">Down: <strong>{{ cmp.dn_count }}</strong></span>
+          <span class="stat">Total: <strong>{{ cmp.volcano_df | length }}</strong></span>
+        </div>
+        <div style="text-align: center; margin-bottom: 16px;">
+          <img src="{{ cmp.img_url }}" alt="Volcano plot" class="plot-img" style="max-width: 640px;">
+        </div>
+        <div style="overflow-x: auto;">
+          {% set df = cmp.volcano_df %}
+          <table class="dataframe">
+            <thead>
+              <tr>
+                <th>Index</th>
+                <th>Metabolite</th>
+                <th>{% if cmp.method == 'spearman' %}r_s{% else %}log2FC{% endif %}</th>
+                <th>{% if cmp.method == 'vip' %}VIP{% else %}-log10(p){% endif %}</th>
+                <th>Trend</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in df %}
+              {% if row.sig != 'no' %}
+              <tr>
+                <td>{{ row.index }}</td>
+                <td>{{ row['Metabolite name'] }}</td>
+                <td>{{ "%.3f" | format(row.log2FC) }}</td>
+                <td>{{ "%.3f" | format(row.negLog10P if cmp.method != 'vip' else row.VIP) }}</td>
+                <td><strong style="color: {% if row.sig == 'up' %}#ca0020{% else %}#0571b0{% endif %};">{{ row.sig }}</strong></td>
+              </tr>
+              {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<script>
+function toggleMethodForm() {
+  var method = document.getElementById('method-select').value;
+  var twoGroup = document.getElementById('twogroup-fields');
+  var spearman = document.getElementById('spearman-fields');
+  var xcutLabel = document.getElementById('xcut-label');
+  var ycutLabel = document.getElementById('ycut-label');
+
+  if (method === 'spearman') {
+    twoGroup.style.display = 'none';
+    spearman.style.display = 'grid';
+    xcutLabel.textContent = 'Correlation cutoff (|r_s|)';
+    ycutLabel.textContent = '-log10(p) cutoff';
+  } else if (method === 'vip') {
+    twoGroup.style.display = 'grid';
+    spearman.style.display = 'none';
+    xcutLabel.textContent = 'log2FC cutoff';
+    ycutLabel.textContent = 'VIP cutoff';
+  } else {
+    twoGroup.style.display = 'grid';
+    spearman.style.display = 'none';
+    xcutLabel.textContent = 'log2FC cutoff';
+    ycutLabel.textContent = '-log10(p) cutoff';
+  }
+}
+</script>
+{% endblock %}

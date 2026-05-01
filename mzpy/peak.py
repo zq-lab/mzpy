@@ -1,4 +1,11 @@
-#enconding: UTF-8
+# -*- coding: utf-8 -*-
+'''
+更新说明：
+    剔除了所有的绘图代码，轻量化
+    绘图应交给用户调用自己喜欢的绘图包处理，或者使用mzpy独立的绘图模块
+    绝大多数情况下，seaborn搭配数据框已足够好用
+    同时有利于降低耦合度
+'''
 '''
 MSMS database or data sheet processor
 
@@ -342,24 +349,12 @@ class PeakFrame(pd.DataFrame):
 
 
     
+        
 #################################################################
     def classfy_np(self, smiles_on='SMILES'):
         df = np_classfy_df(self, smiles_on=smiles_on)
         return df
     
-    def plot_chrom(self,
-                   x = 'retentiontime',
-                   y = 'intensity',
-                   legend= False,
-                   linewidth = 0.5,
-                   *args, **kwargs):
-        return super().plot(x = x,
-                            y = y,
-                            legend = legend,
-                            linewidth = linewidth,
-                            *args,
-                            **kwargs)  
-  
     def drop_istd_peak(self, mz, rt, mz_window = 0.005, rt_window = 3):
         '''
         drop internal standard according to precursor mz and retentontime
@@ -374,7 +369,7 @@ class PeakFrame(pd.DataFrame):
         istd = self[(self['precursormz'] < mz + mz_window) & 
                     (self['precursormz'] > mz - mz_window) &
                     (self['retentiontime'] < rt + rt_window) &
-                    (self['retentiontime'] > rt + rt_window)]
+                    (self['retentiontime'] > rt - rt_window)]
         return self.drop(istd.index)
     
     def drop_duplicated_ms(self, 
@@ -600,6 +595,7 @@ class PeakFrame(pd.DataFrame):
         msms_array = df['MSMS'].values
         n_records = len(msms_array)
         arr_3d = np.stack([msms_array[i] for i in range(n_records)], axis=0)
+        arr_3d = np.stack(msms_array, axis=0)
         
         return arr_3d
         
@@ -697,21 +693,19 @@ class PeakFrame(pd.DataFrame):
             
         scores= similarity.get_scores_batch(self_msl, que_msl, tol)
         # (matched_count, matched_ratio, bonanza, simple_dot, modified_dot, entropy) by batch
-        df_counts   = pd.DataFrame(scores[0]).stack().rename_axis(['idx', 'que_idx']).reset_index(name='matched_counts')
-        df_mt_ratio = pd.DataFrame(scores[1]).stack().rename_axis(['idx', 'que_idx']).reset_index(name='matched_ratio')    
-        df_bonanza  = pd.DataFrame(scores[2]).stack().rename_axis(['idx', 'que_idx']).reset_index(name='bonanza')  
-        df_smp_dot  = pd.DataFrame(scores[3]).stack().rename_axis(['idx', 'que_idx']).reset_index(name='simple_dot')
-        df_mod_dot  = pd.DataFrame(scores[4]).stack().rename_axis(['idx', 'que_idx']).reset_index(name='modified_dot')  
-        df_entropy  = pd.DataFrame(scores[5]).stack().rename_axis(['idx', 'que_idx']).reset_index(name='entropy')   
+        score_names = ['matched_counts', 'matched_ratio', 'bonanza',
+                       'simple_dot', 'modified_dot', 'entropy']
+        score_dfs = [
+            pd.DataFrame(scores[i]).stack()
+            .rename_axis(['idx', 'que_idx']).reset_index(name=score_names[i])
+            for i in range(6)
+        ]
         #! 保持顺序一致，self.enrich函数的计算逻辑，依赖这个顺序
 
-        # 合并所有数据框  
-        df = df_counts.merge(df_mt_ratio, on=['idx', 'que_idx']) \
-                      .merge(df_bonanza,  on=['idx', 'que_idx']) \
-                      .merge(df_smp_dot,  on=['idx', 'que_idx']) \
-                      .merge(df_mod_dot,  on=['idx', 'que_idx']) \
-                      .merge(df_entropy,  on=['idx', 'que_idx']) \
-        
+        # 合并所有数据框
+        df = score_dfs[0]
+        for s_df in score_dfs[1:]:
+            df = df.merge(s_df, on=['idx', 'que_idx'])
         ## 位置索引转换为行索引
         df['idx'] = self.index[df['idx'].tolist()]
         if que is None:
@@ -742,9 +736,9 @@ class PeakFrame(pd.DataFrame):
 
             if que is not None:
                 for i in range(0, len(self), chunk_size):
-                    chunk_self = self.iloc[start:start+chunk_size]
+                    chunk_self = self.iloc[i:i+chunk_size]
                     for j in range(0, len(que), chunk_size):
-                        chunk_que = self.iloc[start:start+chunk_size]
+                        chunk_que = que.iloc[j:j+chunk_size]
                         scores_df = chunk_self.match(que=chunk_que,
                                                      mz_on = mz_on,
                                                      MSMS_on = MSMS_on,
@@ -982,7 +976,7 @@ class PeakFrame(pd.DataFrame):
             self['Num Peaks'] = self['msms'].apply(len)
         else:
            self['Num Peaks'] = 0
-           print('Warning: no MSMS found!')
+           warnings.warn('Warning: no MSMS found!', UserWarning)
 
 ### readers
 #-----------------------------------------------------------------------------------
@@ -1060,7 +1054,7 @@ def read_mona_msp(fpath,
     param:
         extract_smiles, extract smiles string from comment field.
     '''
-    df = PeakFrame. read_msp(fpath, sep_ms2=sep_ms2)
+    df = PeakFrame.read_msp(fpath, sep_ms2=sep_ms2)
     if extract_smiles:
         df['smiles'] = df['Comments'].str.extract('SMILES=(.*?)"')
     return df
@@ -1098,10 +1092,10 @@ def read_msd_msp(fname, use_relative_abundance=False, include_fname=True, **kwar
     df[['peak_height', 'peak_area']] = df[['peak_height', 'peak_area']].astype(float)
 
     if use_relative_abundance:
-        base_pk_heght = df['peak_height'].max(skipna=True)
+        base_pk_height = df['peak_height'].max(skipna=True)
         base_pk_area  = df['peak_area'].max(skipna=True)
-        if base_pk_heght and not np.isnan(base_pk_heght):
-            df['peak_height'] = 100 * df['peak_height'] / base_pk_heght
+        if base_pk_height and not np.isnan(base_pk_height):
+            df['peak_height'] = 100 * df['peak_height'] / base_pk_height
         if base_pk_area and not np.isnan(base_pk_area):
             df['peak_area'] = 100 * df['peak_area'] / base_pk_area
 

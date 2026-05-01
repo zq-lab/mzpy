@@ -15,7 +15,7 @@ from statsmodels.sandbox.stats.multicomp import multipletests
 from typing import List, Optional, Pattern, Union, Any
 
 from .peak import PeakFrame
-from .plot import Plot
+from .plot import plot_pca, plot_plsda, plot_volcano, plot_box, plot_venn
 
 _id_pattern_ = {'zid' : r"[MK]\d{4}", 
                 'kegg': r'(C\d{5})',
@@ -61,14 +61,59 @@ def _extract_first_match(index: List[Optional[str]],
             result.append(m.group(0))
     return result
 
-mzplt = Plot()
-
-class Metab(pd.DataFrame):  
+class Metab(pd.DataFrame):
+    _metadata = ['layer']
 
     @property
     def _constructor(self):
         return self.__class__
     
+    def __init__(self, *args, **kwargs):
+        layer = kwargs.pop('layer', None)
+        super().__init__(*args, **kwargs)
+        self.layer = layer if layer is not None else {}
+
+    # ------------------------------------------------------------------
+    #  类 anndata 访问层 (obs / X / var)
+    # ------------------------------------------------------------------
+    @property
+    def obs(self):
+        """
+        代谢物注释信息（metadata）。
+        返回列名展平为单层的 DataFrame，便于直接访问。
+        """
+        info_cols = [c for c in self.columns if c[0] == '_']
+        if not info_cols:
+            return pd.DataFrame(index=self.index)
+        df = self[info_cols].copy()
+        df.columns = df.columns.get_level_values(1)
+        return df
+
+    @property
+    def X(self):
+        """
+        定量矩阵（assay data），仅包含 (group, sample) 列。
+        返回副本，避免意外修改原始数据。
+        """
+        sample_cols = [c for c in self.columns if c[0] != '_']
+        if not sample_cols:
+            return pd.DataFrame(index=self.index)
+        return self[sample_cols].copy()
+
+    @property
+    def var(self):
+        """
+        样本注释表，描述每个样本所属的分组。
+        返回 DataFrame，列：group | sample
+        """
+        sample_cols = [c for c in self.columns if c[0] != '_']
+        if not sample_cols:
+            return pd.DataFrame()
+        return pd.DataFrame({
+            'group': [c[0] for c in sample_cols],
+            'sample': [c[1] for c in sample_cols]
+        })
+
     def drop_duplicated_ms(self, 
                            mz_on='Average Mz',
                            ms_on='MS/MS spectrum',
@@ -219,17 +264,16 @@ class Metab(pd.DataFrame):
         data.index = data.index.get_level_values(level=0)
         groups = pd.Categorical(data.index)
         
-        # 调用绘图函数
-        return mzplt.pca(data, groups=groups, labels=labels, palette=palette, save_to=save_to)
+        # 调用绘图函数（已在上方做 log10，故关闭内部转换）
+        return plot_pca(data, groups=groups, labels=labels, color_type=palette,
+                        data_transfer=None, save_to=save_to)
     
     @property
-    def quantum(self, groups=None):
+    def quantum(self):
         '''
-        return the quantity data frame
+        return the quantity data frame (alias for .X)
         '''
-        if not groups:
-            groups = self.groups
-        return self[groups]
+        return self.X
 
     def plsda(self, groups:list=None, palette='Set1', save_to:str=None):
         from sklearn.cross_decomposition import PLSRegression
@@ -251,8 +295,9 @@ class Metab(pd.DataFrame):
         # 只取 X 方向的 scores
         X_plsda = pls_da.fit_transform(X_std, y_std)[0]
 
-        # 使用 Plot.plsda_plt 来画图
-        mzplt.plsda_plt(T_scores=X_plsda, y=y_std, palette=palette, save_to=save_to)
+        # 使用 Plot.plsda_plt 来画图（传入的是得分矩阵，关闭内部转换）
+        plot_plsda(T_scores=X_plsda, y=y_std, color_type=palette,
+                   data_transfer=None, save_to=save_to)
 
         # 下面 VIP 计算代码保持不变
         loading_vectors = pls_da.x_weights_
@@ -303,11 +348,11 @@ class Metab(pd.DataFrame):
 
     def spearman(self,
                  key_on='Alignment ID',
-                 groups=None,
+                 groups=None, # orderd groups for spearman test, if None, use all groups
                  corr_thd=0.8,
                  p_thd=0.01,
                  fdr_corr=True,
-                 save_to=None):
+                 save_fig_to=None):
         '''
         param:
             groups, list, groups for Spearman's test
@@ -369,16 +414,16 @@ class Metab(pd.DataFrame):
             else:
                 df.loc[i, 'monot'] = 'no'
 
-        plot = mzplt.volcano(df,
-                             x = 'corr',
-                             y = '-log_pval',
-                             fill = 'monot',
-                             title = 'Spearman test',
-                             xlab = r'$r_s$',
-                             ylab = r'-$\log_{10}(\mathrm{p\text{-}value})$',
-                             xcut = corr_thd,
-                             ycut = -np.log10(p_thd),
-                             save_to=save_to)
+        plot = plot_volcano(df,
+                             x='corr',
+                             y='-log_pval',
+                             fill='monot',
+                             title='Spearman test',
+                             xlab=r'$r_s$',
+                             ylab=r'-$\log_{10}(\mathrm{p\text{-}value})$',
+                             xcut=corr_thd,
+                             ycut=-np.log10(p_thd),
+                             save_to=save_fig_to)
         return df, plot
     
     def to_long_df(self, groups=None, index=None, select=None):
@@ -409,7 +454,8 @@ class Metab(pd.DataFrame):
     
     def plot_metabo_trend(self, groups=None, index=None, select=None, ncols=4, save_to=None):
         mx = self.to_long_df(groups=groups, index=index, select=select)
-        return mzplt.box(mx, log_transform=True, ncol=ncols, save_to=save_to)
+        return plot_box(mx, x='group', y='value', facet='metabo',
+                        log_transform=True, ncol=ncols, save_to=save_to)
     
     def trio(self, vs1, vs2,
             pattern:str,
@@ -465,7 +511,7 @@ class Metab(pd.DataFrame):
         else:
             raise ValueError('The pattern should be one of  ("anti", "syn", "var")')
 
-        p_venn = mzplt.venn(data)
+        p_venn = plot_venn(data)
 
         # gather dem
         if pattern == 'anti':
@@ -566,11 +612,11 @@ class Metab(pd.DataFrame):
                                                 else row['trend'],
                                                 axis=1)
         # ploting vocano digram
-        plot = mzplt.volcano(df, x='log2FC', y='neg_log10_qval', fill='trend',
-                               xcut = np.log2(fc),
-                               ycut = -np.log10(p),
-                               title = f'{nume} / {deno}',
-                               palette = palette,
+        plot = plot_volcano(df, x='log2FC', y='neg_log10_qval', fill='trend',
+                               xcut=np.log2(fc),
+                               ycut=-np.log10(p),
+                               title=f'{nume} / {deno}',
+                               color_type=palette,
                                save_to=save_fig_to)
         return df, plot
 
@@ -644,11 +690,12 @@ class Metab(pd.DataFrame):
                                                 else row['trend'],
                                                 axis=1)
         # ploting vocano digram
-        plot = mzplt.volcano(df, x='log2FC', y='vip', fill='trend',
-                               xcut = np.log2(fc),
-                               ycut = 1,
-                               title = f'{nume} / {deno}',
-                               palette = palette,
+        plot = plot_volcano(df, x='log2FC', y='vip', fill='trend',
+                               xcut=np.log2(fc),
+                               ycut=1,
+                               ylab='VIP',
+                               title=f'{nume} / {deno}',
+                               color_type=palette,
                                save_to=save_fig_to)
         return df, plot   
     
@@ -707,20 +754,43 @@ def parse_ms_data_to_array(ms_string):
     return ms_array  
     
 
+def _reorder_columns(df):
+    """
+    规范列顺序：
+    1. 将普通列统一转为 MultiIndex ('_', col)
+    2. '_' 信息列在前，(group, sample) 样本列在后并按 group / sample 排序
+    """
+    # 统一为两级 MultiIndex
+    if not isinstance(df.columns, pd.MultiIndex):
+        cols = []
+        for c in df.columns:
+            if isinstance(c, tuple):
+                cols.append(c if len(c) == 2 else (c[0], '_'.join(map(str, c[1:]))))
+            else:
+                cols.append(('_', c))
+        df.columns = pd.MultiIndex.from_tuples(cols)
+
+    info_cols = [c for c in df.columns if c[0] == '_']
+    sample_cols = [c for c in df.columns if c[0] != '_']
+    sample_cols = sorted(sample_cols, key=lambda x: (x[0], x[1]))
+
+    new_cols = info_cols + sample_cols
+    return df[new_cols]
+
+
 def read_msd_ali(fpath:str, drop_null_ms=True):
     '''
     fpath: file path of MSdial-exported txt file 
     '''
-    df = pd.read_table(fpath, header = [0,4],
-                    #    index_col = 0,
-                        low_memory = False)
+    df = pd.read_table(fpath, header=[0, 4], low_memory=False)
     if 'NA' in df.columns:
         del df['NA']
     cols = [['_', it[1]]
-                if it[0].startswith('Unnamed') or it[0].startswith('Class')
-                else list(it)
-                    for it in df.columns]
+            if it[0].startswith('Unnamed') or it[0].startswith('Class')
+            else list(it)
+            for it in df.columns]
     df.columns = pd.MultiIndex.from_tuples(cols)
+    df = _reorder_columns(df)
     df = Metab(df)
 
     if drop_null_ms:
@@ -760,3 +830,43 @@ def read_sample_info(file_path, comment='#', encoding='utf-8'):
     
     return sample_info 
 
+
+
+if __name__ == "__main__":
+    pass  # 以下为使用示例注释，取消注释即可运行
+    # ================================================================
+    #  Metab 类 anndata 访问层使用示例
+    # ================================================================
+
+    # 1. 读取 MSDial 对齐结果
+    # mb = read_msd_ali('path/to/msdial_alignment.txt')
+
+    # 2. 查看代谢物注释信息（列名已展平为单层）
+    # mb.obs[['Alignment ID', 'Metabolite name', 'Average Mz', 'Average Rt(min)']]
+
+    # 3. 取定量矩阵（纯数值，可直接用于 sklearn / scipy）
+    # X = mb.X                     # 返回副本，不会修改原始数据
+    # X.values.shape               # (n_metabolites, n_samples)
+
+    # 4. 查看样本分组表
+    # mb.var
+    #    group  sample
+    # 0     QC  00_QC5
+    # 1     G0    G0_1
+    # ...
+
+    # 5. 使用 layer 保存多版本数据（类似 anndata.layers）
+    # mb.layer['filled'] = mb.fill_quantum_zero()
+    # mb.layer['log10']  = np.log10(mb.layer['filled'])
+    # mb.layer['scaled'] = StandardScaler().fit_transform(mb.layer['log10'].T).T
+
+    # 6. 常用便捷属性
+    # mb.groups       # 所有分组名（排除 '_'）
+    # mb.quantum      # .X 的别名
+
+    # 7. 转换为 tidy 长表（用于 plotnine / seaborn）
+    # long_df = mb.to_long_df(groups=['G0', 'G1'], index='Metabolite name')
+    # long_df.head()
+    #    metabo  group sample     value
+    # 0  Glucose    G0   G0_1  1.23e+06
+    # ...

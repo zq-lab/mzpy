@@ -274,4 +274,9 @@ GNU General Public License v3.0
 If you use mzpy in academic work, please cite the repository:
 - GitHub: https://github.com/zq-lab/mzpy
 
+## Acknowledgements
+
+- **FELLA**: This project incorporates a Python rewrite of FELLA, a metabolomics enrichment analysis package originally developed for the Bioconductor community in R. The rewritten module is integrated into mzpy.
+
+- **dreaMS**: We include code for calling dreaMS, which enables conversion of mass spectra into vector representations.
 

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}PLSDA – mzpy{% endblock %}
+{% block subtitle %}4. PLSDA & VIP{% endblock %}
+
+{% block content %}
+<div class="tile tile-light" style="text-align: center;">
+  <h2>PLS-DA Scores</h2>
+  {% if img_url %}
+    <img src="{{ img_url }}" alt="PLSDA plot" class="plot-img" style="margin-top: 24px;">
+  {% else %}
+    <p style="color: var(--muted-ink-48);">No plot available.</p>
+  {% endif %}
+</div>
+
+<div class="tile tile-parchment">
+  <div class="container" style="max-width: 900px;">
+    <h2>VIP Table (Top 50)</h2>
+    <div style="overflow-x: auto;">
+      {{ vip_table | safe }}
+    </div>
+  </div>
+</div>
+
+<div class="tile tile-light">
+  <div class="container" style="max-width: 600px;">
+    <h2>Filter by VIP</h2>
+    <form method="post">
+      <div class="form-group">
+        <label>VIP threshold</label>
+        <input type="number" name="vip_threshold" value="1.0" step="0.1" min="0">
+      </div>
+      <button type="submit" class="btn btn-primary">Filter & Continue to DEM</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

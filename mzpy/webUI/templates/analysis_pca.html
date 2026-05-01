@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}PCA – mzpy{% endblock %}
+{% block subtitle %}3. PCA{% endblock %}
+
+{% block content %}
+<div class="tile tile-parchment" style="text-align: center;">
+  <h2>Principal Component Analysis</h2>
+  {% if img_url %}
+    <img src="{{ img_url }}" alt="PCA plot" class="plot-img" style="margin-top: 24px;">
+  {% else %}
+    <p style="color: var(--muted-ink-48);">No plot available.</p>
+  {% endif %}
+  <div style="margin-top: 32px;">
+    <a href="{{ url_for('analysis.plsda') }}" class="btn btn-primary">Next: PLSDA →</a>
+  </div>
+</div>
+{% endblock %}

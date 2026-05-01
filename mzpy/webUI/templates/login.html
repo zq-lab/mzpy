@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Sign In – mzpy{% endblock %}
+{% block subtitle %}Authentication{% endblock %}
+
+{% block content %}
+<div class="login-tile">
+  <div class="login-card">
+    <h1>Sign In</h1>
+    <p style="color: var(--muted-ink-48); margin-bottom: 24px;">Enter the access password to continue.</p>
+    <form method="post" action="{{ url_for('auth.login') }}">
+      <div class="form-group">
+        <input type="password" name="password" placeholder="Password" required autofocus>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width: 100%;">Sign In</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
