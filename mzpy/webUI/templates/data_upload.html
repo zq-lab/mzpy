@@ -3,17 +3,105 @@
 {% block subtitle %}1. Data Upload{% endblock %}
 
 {% block content %}
+<!-- Loading overlay -->
+<div class="upload-overlay" id="uploadOverlay">
+  <div class="upload-spinner"></div>
+  <p id="overlayText">Parsing data, please wait…</p>
+</div>
+
 <div class="tile tile-parchment">
   <div class="container" style="max-width: 720px;">
-    <h2>Upload MSDial Alignment</h2>
-    <p style="color: var(--muted-ink-80);">Select the alignment file exported from MSDial. Supported formats: <code>.txt</code>, <code>.csv</code>, <code>.xlsx</code>.</p>
+    <h2>Upload Data</h2>
+    <p style="color: var(--muted-ink-80);">
+      Upload your metabolomics data. Supports MS-Dial alignment exports as well as generic CSV/Excel tables.
+    </p>
 
-    <form method="post" enctype="multipart/form-data" style="margin-top: 32px;">
+    <form method="post" enctype="multipart/form-data" id="uploadForm"
+          style="margin-top: 32px;"
+          onsubmit="document.getElementById('uploadOverlay').classList.add('active'); document.getElementById('submitBtn').textContent='Processing…'; return true;">
+
+      <!-- Data files -->
       <div class="form-group">
-        <input type="file" name="alignment_file" accept=".txt,.csv,.xlsx" required>
+        <label for="alignment_file">Data file(s)</label>
+        <input type="file" id="alignment_file" name="alignment_file"
+               accept=".txt,.csv,.xlsx,.xls" multiple required
+               onchange="updateFileList()">
+        <p style="font-size: 13px; color: var(--muted-ink-48); margin-top: 6px;">
+          Hold <kbd>Ctrl</kbd> (or <kbd>Cmd</kbd>) to select multiple files.
+          Multiple files will be concatenated.
+        </p>
+        <!-- File list display -->
+        <div class="file-list" id="fileListBox" style="display: none;">
+          <div class="file-count" id="fileCount"></div>
+          <ul id="fileList"></ul>
+        </div>
       </div>
-      <button type="submit" class="btn btn-primary">Upload & Parse</button>
+
+      <!-- MS-Dial toggle -->
+      <div class="form-group" style="display: flex; align-items: center; gap: 8px;">
+        <input type="checkbox" id="is_msdial" name="is_msdial"
+               checked onchange="toggleMsdialMode()">
+        <label for="is_msdial" style="margin: 0; font-weight: 500;">
+          This is an MS-Dial Alignment file
+        </label>
+      </div>
+
+      <!-- Group file (hidden when MS-Dial is checked) -->
+      <div id="group-file-section" class="form-group" style="display: none;">
+        <label for="group_file">Group info table (CSV)</label>
+        <input type="file" id="group_file" name="group_file"
+               accept=".csv,.txt">
+        <p style="font-size: 13px; color: var(--muted-ink-48); margin-top: 6px;">
+          A long-format table: column 1 = group name, column 2 = sample name.
+        </p>
+      </div>
+
+      <button type="submit" class="btn btn-primary" style="margin-top: 16px;" id="submitBtn">
+        Upload & Parse
+      </button>
     </form>
   </div>
 </div>
+
+<script>
+function updateFileList() {
+  var input = document.getElementById('alignment_file');
+  var listBox = document.getElementById('fileListBox');
+  var list = document.getElementById('fileList');
+  var count = document.getElementById('fileCount');
+  var files = input.files;
+
+  if (!files || files.length === 0) {
+    listBox.style.display = 'none';
+    return;
+  }
+
+  list.innerHTML = '';
+  for (var i = 0; i < files.length; i++) {
+    var li = document.createElement('li');
+    var size = files[i].size;
+    var sizeText = size < 1024 ? size + ' B' : (size / 1024).toFixed(1) + ' KB';
+    li.textContent = files[i].name + '  (' + sizeText + ')';
+    list.appendChild(li);
+  }
+  count.textContent = files.length + ' file' + (files.length > 1 ? 's' : '') + ' selected';
+  listBox.style.display = 'block';
+}
+
+function toggleMsdialMode() {
+  var chk = document.getElementById('is_msdial');
+  var sec = document.getElementById('group-file-section');
+  var inp = document.getElementById('group_file');
+  if (chk.checked) {
+    sec.style.display = 'none';
+    inp.removeAttribute('required');
+  } else {
+    sec.style.display = 'block';
+    inp.setAttribute('required', '');
+  }
+}
+
+// Initialize state on page load
+toggleMsdialMode();
+</script>
 {% endblock %}

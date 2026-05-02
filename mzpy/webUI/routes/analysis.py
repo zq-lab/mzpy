@@ -9,7 +9,7 @@ import pandas as pd
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..auth import login_required
-from ..services.plot_adapter import plot_pca, plot_plsda
+from ..services.plot_adapter import pca as pca_plot, plsda as plsda_plot
 from ..services.session_store import load_json, load_metab, save_json, save_metab
 
 analysis_bp = Blueprint("analysis", __name__, url_prefix="/analysis")
@@ -43,7 +43,7 @@ def pca():
         flash(f"Data subset error: {exc}", "error")
         return redirect(url_for("data.preview"))
 
-    img_url = plot_pca(df_num, groups=grp_list, add_ellipse=True)
+    img_url = pca_plot(df_num, groups=grp_list, add_ellipse=True)
     return render_template("analysis_pca.html", img_url=img_url, groups=groups)
 
 
@@ -93,7 +93,7 @@ def plsda():
         pls.fit(X, y)
         scores = pls.x_scores_
 
-        img_url = plot_plsda(scores, grp_list, data_transfer=None)
+        img_url = plsda_plot(scores, grp_list, data_transfer=None)
 
         W0 = pls.x_weights_ / np.sqrt(np.sum(pls.x_weights_ ** 2, axis=0))
         q = pls.y_loadings_

@@ -15,7 +15,7 @@ from statsmodels.sandbox.stats.multicomp import multipletests
 from typing import List, Optional, Pattern, Union, Any
 
 from .peak import PeakFrame
-from .plot import plot_pca, plot_plsda, plot_volcano, plot_box, plot_venn
+from .plot import pca, plsda, volcano, box, venn
 
 _id_pattern_ = {'zid' : r"[MK]\d{4}", 
                 'kegg': r'(C\d{5})',
@@ -205,6 +205,64 @@ class Metab(pd.DataFrame):
     @property
     def groups(self):
         return self.columns.levels[0].drop('_').to_list()
+
+    def reassign_groups(self, mapping: dict, inplace: bool = False):
+        """
+        Reassign samples to new groups.
+
+        Parameters
+        ----------
+        mapping : dict
+            ``{sample_name: new_group_name}``.
+        inplace : bool, default False
+            If True, modify the object in-place.
+
+        Returns
+        -------
+        Metab or None
+        """
+        df = self if inplace else self.copy()
+        new_cols = []
+        for c in df.columns:
+            if c[0] == '_':
+                new_cols.append(c)
+            else:
+                sample = c[1]
+                new_group = mapping.get(sample, c[0])
+                new_cols.append((new_group, sample))
+        df.columns = pd.MultiIndex.from_tuples(new_cols)
+        df = _reorder_columns(df)
+        if inplace:
+            return None
+        return df
+
+    def filter_min_expression(self, threshold: float = 0.0, inplace: bool = False):
+        """
+        Filter metabolites by minimum expression across all samples.
+
+        Parameters
+        ----------
+        threshold : float
+            Keep rows where the minimum value across all sample columns
+            is >= *threshold*.
+        inplace : bool, default False
+
+        Returns
+        -------
+        Metab or None
+        """
+        df = self if inplace else self.copy()
+        sample_cols = [c for c in df.columns if c[0] != '_']
+        if not sample_cols:
+            if inplace:
+                return None
+            return df
+        mask = df[sample_cols].min(axis=1) >= threshold
+        df = df.loc[mask, :]
+        df = _reorder_columns(df)
+        if inplace:
+            return None
+        return df
     
     def hstack(self, _cols, groups, drop_col_levels=False):
         '''
@@ -265,7 +323,7 @@ class Metab(pd.DataFrame):
         groups = pd.Categorical(data.index)
         
         # 调用绘图函数（已在上方做 log10，故关闭内部转换）
-        return plot_pca(data, groups=groups, labels=labels, color_type=palette,
+        return pca(data, groups=groups, labels=labels, color_type=palette,
                         data_transfer=None, save_to=save_to)
     
     @property
@@ -296,7 +354,7 @@ class Metab(pd.DataFrame):
         X_plsda = pls_da.fit_transform(X_std, y_std)[0]
 
         # 使用 Plot.plsda_plt 来画图（传入的是得分矩阵，关闭内部转换）
-        plot_plsda(T_scores=X_plsda, y=y_std, color_type=palette,
+        plsda(T_scores=X_plsda, y=y_std, color_type=palette,
                    data_transfer=None, save_to=save_to)
 
         # 下面 VIP 计算代码保持不变
@@ -414,7 +472,7 @@ class Metab(pd.DataFrame):
             else:
                 df.loc[i, 'monot'] = 'no'
 
-        plot = plot_volcano(df,
+        plot = volcano(df,
                              x='corr',
                              y='-log_pval',
                              fill='monot',
@@ -454,7 +512,7 @@ class Metab(pd.DataFrame):
     
     def plot_metabo_trend(self, groups=None, index=None, select=None, ncols=4, save_to=None):
         mx = self.to_long_df(groups=groups, index=index, select=select)
-        return plot_box(mx, x='group', y='value', facet='metabo',
+        return box(mx, x='group', y='value', facet='metabo',
                         log_transform=True, ncol=ncols, save_to=save_to)
     
     def trio(self, vs1, vs2,
@@ -511,7 +569,7 @@ class Metab(pd.DataFrame):
         else:
             raise ValueError('The pattern should be one of  ("anti", "syn", "var")')
 
-        p_venn = plot_venn(data)
+        p_venn = venn(data)
 
         # gather dem
         if pattern == 'anti':
@@ -612,7 +670,7 @@ class Metab(pd.DataFrame):
                                                 else row['trend'],
                                                 axis=1)
         # ploting vocano digram
-        plot = plot_volcano(df, x='log2FC', y='neg_log10_qval', fill='trend',
+        plot = volcano(df, x='log2FC', y='neg_log10_qval', fill='trend',
                                xcut=np.log2(fc),
                                ycut=-np.log10(p),
                                title=f'{nume} / {deno}',
@@ -690,7 +748,7 @@ class Metab(pd.DataFrame):
                                                 else row['trend'],
                                                 axis=1)
         # ploting vocano digram
-        plot = plot_volcano(df, x='log2FC', y='vip', fill='trend',
+        plot = volcano(df, x='log2FC', y='vip', fill='trend',
                                xcut=np.log2(fc),
                                ycut=1,
                                ylab='VIP',
@@ -797,6 +855,67 @@ def read_msd_ali(fpath:str, drop_null_ms=True):
         df = df.drop_null_msms()
 
     return df.reset_index(drop=True)
+
+
+def read_csv(
+    data_file: str,
+    group_file: str,
+    group_col: str = None,
+    sample_col: str = None,
+) -> "Metab":
+    """
+    从 CSV / Excel 数据表和分组信息表构建 Metab 对象。
+
+    *group_file* 为长表格式，默认第一列为组名、第二列为样本名。
+    *data_file* 为宽表格式，行 = 代谢物；列中：
+    - 与 *group_file* 样本名匹配的列 → ``(group, sample)``
+    - 其余列 → ``('_', info_col)``（代谢物基本信息）
+
+    Parameters
+    ----------
+    data_file : str
+        数据表路径（``.csv``、``.txt``、``.xlsx``、``.xls`` 均可）。
+    group_file : str
+        分组信息表路径（长表，默认第一列组名、第二列样本名）。
+    group_col : str, optional
+        group_file 中分组名的列名，默认第一列。
+    sample_col : str, optional
+        group_file 中样本名的列名，默认第二列。
+
+    Returns
+    -------
+    Metab
+    """
+    # 1. 读取分组信息
+    group_df = pd.read_csv(group_file)
+    if group_col is None:
+        group_col = group_df.columns[0]
+    if sample_col is None:
+        sample_col = group_df.columns[1]
+
+    sample_to_group = dict(zip(group_df[sample_col].astype(str), group_df[group_col].astype(str)))
+
+    # 2. 读取数据表
+    fpath = str(data_file).lower()
+    if fpath.endswith(('.xlsx', '.xls')):
+        data_df = pd.read_excel(data_file)
+    else:
+        data_df = pd.read_csv(data_file, low_memory=False)
+
+    # 3. 构建 MultiIndex 列
+    new_cols = []
+    for c in data_df.columns:
+        c_str = str(c)
+        if c_str in sample_to_group:
+            new_cols.append((sample_to_group[c_str], c_str))
+        else:
+            new_cols.append(('_', c_str))
+
+    data_df.columns = pd.MultiIndex.from_tuples(new_cols)
+
+    # 4. 排序并包装为 Metab
+    data_df = _reorder_columns(data_df)
+    return Metab(data_df)
 
 
 def read_sample_info(file_path, comment='#', encoding='utf-8'):  

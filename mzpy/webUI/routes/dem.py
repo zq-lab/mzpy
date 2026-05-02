@@ -69,7 +69,7 @@ def _calc_ttest(metab, g1, g2, xcut, ycut):
         return "no"
     volcano_df["sig"] = volcano_df.apply(classify, axis=1)
 
-    from ...plot import plot_volcano as _plot_volcano
+    from ...plot import volcano as _plot_volcano
     p = _plot_volcano(
         volcano_df, x="log2FC", y="negLog10P", fill="sig",
         xcut=xcut, ycut=ycut,
@@ -113,7 +113,7 @@ def _calc_vip(metab, g1, g2, xcut, ycut):
         return "no"
     volcano_df["sig"] = volcano_df.apply(classify, axis=1)
 
-    from ...plot import plot_volcano as _plot_volcano
+    from ...plot import volcano as _plot_volcano
     p = _plot_volcano(
         volcano_df, x="log2FC", y="VIP", fill="sig",
         xcut=xcut, ycut=ycut, ylab="VIP",
@@ -140,7 +140,7 @@ def _calc_spearman(metab, ordered_groups, corr_thd, p_thd):
     volcano_df["sig"] = df_spearman["monot"]
 
     # Re-plot with consistent styling
-    from ...plot import plot_volcano as _plot_volcano
+    from ...plot import volcano as _plot_volcano
     p = _plot_volcano(
         volcano_df, x="log2FC", y="negLog10P", fill="sig",
         xcut=corr_thd, ycut=-np.log10(p_thd),

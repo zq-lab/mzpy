@@ -200,7 +200,7 @@ def _save_mpl(fig, save_to: Optional[str], dpi: Optional[int] = None) -> None:
 #  1. Bar chart
 # ═══════════════════════════════════════════════════════════════
 
-def plot_bar(
+def bar(
     df: pd.DataFrame,
     x: str,
     y: Optional[str] = None,
@@ -270,7 +270,7 @@ def plot_bar(
 #  2. Box plot
 # ═══════════════════════════════════════════════════════════════
 
-def plot_box(
+def box(
     df: pd.DataFrame,
     x: str,
     y: str,
@@ -337,7 +337,7 @@ def plot_box(
 #  3. Donut chart  (matplotlib)
 # ═══════════════════════════════════════════════════════════════
 
-def plot_donut(
+def donut(
     df: pd.DataFrame,
     column: str,
     title: str = "",
@@ -392,7 +392,7 @@ def plot_donut(
 #  4. Heatmap  (seaborn)
 # ═══════════════════════════════════════════════════════════════
 
-def plot_heatmap(
+def heatmap(
     df: pd.DataFrame,
     data_transfer: Optional[str] = "log10",
     color_type: str = "diverging",
@@ -454,7 +454,7 @@ def plot_heatmap(
 #  5. Line with error band  (plotnine)
 # ═══════════════════════════════════════════════════════════════
 
-def plot_line(
+def line(
     df: pd.DataFrame,
     x: str,
     y: str,
@@ -517,7 +517,7 @@ def plot_line(
 #  6. Lollipop chart  (plotnine)
 # ═══════════════════════════════════════════════════════════════
 
-def plot_lollipop(
+def lollipop(
     df: pd.DataFrame,
     x: str,
     y: str,
@@ -553,7 +553,7 @@ def plot_lollipop(
 #  7. PCA score plot  (plotnine)
 # ═══════════════════════════════════════════════════════════════
 
-def plot_pca(
+def pca(
     df: pd.DataFrame,
     groups: Optional[Sequence] = None,
     labels: Optional[Sequence[str]] = None,
@@ -626,7 +626,7 @@ def plot_pca(
 #  8. PLS-DA score plot  (matplotlib)
 # ═══════════════════════════════════════════════════════════════
 
-def plot_plsda(
+def plsda(
     T_scores: np.ndarray,
     y: Sequence,
     color_type: str = "qualitative",
@@ -718,7 +718,7 @@ def plot_plsda(
 #  9. Volcano plot  (plotnine)
 # ═══════════════════════════════════════════════════════════════
 
-def plot_volcano(
+def volcano(
     df: pd.DataFrame,
     x: str,
     y: str,
@@ -779,7 +779,7 @@ def plot_volcano(
 #  10. Scatter / TIC-RT-mz style  (plotnine)
 # ═══════════════════════════════════════════════════════════════
 
-def plot_scatter(
+def scatter(
     df: pd.DataFrame,
     x: str,
     y: str,
@@ -829,7 +829,7 @@ def plot_scatter(
 #  11. Venn diagram  (matplotlib)
 # ═══════════════════════════════════════════════════════════════
 
-def plot_venn(
+def venn(
     data: Dict[str, Sequence],
     fill_mode: Optional[List[str]] = None,
     color_type: str = "qualitative",
@@ -992,7 +992,7 @@ def _venn_draw4(ax, labels, names, cmap, alpha, fs):
 #  12. Colour swatch  (matplotlib)
 # ═══════════════════════════════════════════════════════════════
 
-def plot_swatch(
+def swatch(
     colors: Optional[Sequence[str]] = None,
     color_type: str = "qualitative",
     figure_size: Optional[Tuple[float, float]] = None,
@@ -1021,7 +1021,7 @@ def plot_swatch(
 #  13. Chemical network  (igraph + rdkit)
 # ═══════════════════════════════════════════════════════════════
 
-def plot_chemicals_net(
+def chemicals_net(
     smiles_list: List[str],
     threshold: float = 0.6,
     fp_type: str = "morgan",
@@ -1103,7 +1103,7 @@ def plot_chemicals_net(
 #  14. Molecule grid  (rdkit)
 # ═══════════════════════════════════════════════════════════════
 
-def plot_molecules_grid(
+def molecules_grid(
     smiles_list: List[str],
     cols: int = 4,
     mols_per_row: Optional[int] = None,
@@ -1154,7 +1154,7 @@ def plot_molecules_grid(
 #  15. Centroid spectrum  (matplotlib)
 # ═══════════════════════════════════════════════════════════════
 
-def plot_centroid_spectrum(
+def spectrum(
     peaks: Sequence[Sequence[float]],
     title: Optional[str] = None,
     figsize: Tuple[float, float] = (10, 4),
@@ -1261,4 +1261,4 @@ if __name__ == "__main__":
     print("Active colour scheme:")
     for k, v in get_color_scheme().items():
         print(f"  {k:12s}: {v[:3]} ...")
-    print("\nTry:  from mzpy.plot import plot_bar, plot_venn, ...")
+    print("\nTry:  from mzpy.plot import bar, venn, ...")

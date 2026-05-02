@@ -7,7 +7,7 @@ from __future__ import annotations
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
 from ..auth import login_required
-from ..services.plot_adapter import plot_venn
+from ..services.plot_adapter import venn
 from ..services.session_store import load_json, save_json
 
 venn_bp = Blueprint("venn", __name__, url_prefix="/venn")
@@ -56,7 +56,7 @@ def diagram():
         flash(f"Selected {len(kegg_ids)} KEGG compound IDs", "success")
         return redirect(url_for("enrichment.fella"))
 
-    img_url = plot_venn(data, color_type="qualitative")
+    img_url = venn(data, color_type="qualitative")
     return render_template(
         "venn_diagram.html",
         img_url=img_url,

@@ -113,8 +113,8 @@ class PeakFrame(pd.DataFrame):
             elif line.startswith('#PMass'):
                 ion['precursormz'] = line.split('=', 1)[1]
             elif line.strip() == '': # Prevent the cursor from overflowing in the next check
-                ion['collisionenergy'] = '10, 20 40 V'                
-                breaknpeaks_on
+                ion['collisionenergy'] = '10, 20 40 V'
+                break
             elif line[0].isdigit():
                 mz, intensity = line.split(' ')[0:2]
                 MSMS.append([float(mz), float(intensity)])

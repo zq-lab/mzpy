@@ -267,7 +267,7 @@ annot = df.find_precursor_type(target_mass=300.1234, ionmode='pos', mz_on='precu
 
 ## License
 
-GNU General Public License v3.0
+GNU Lesser General Public License v3.0
 
 ## Citation
 
@@ -279,4 +279,6 @@ If you use mzpy in academic work, please cite the repository:
 - **FELLA**: This project incorporates a Python rewrite of FELLA, a metabolomics enrichment analysis package originally developed for the Bioconductor community in R. The rewritten module is integrated into mzpy.
 
 - **dreaMS**: We include code for calling dreaMS, which enables conversion of mass spectra into vector representations.
+
+- **MS-DIAL 5**: This project ports the core spectral similarity scoring algorithms (simple dot product, weighted dot product, reverse dot product, enhanced dot product, and matched-peaks scores) from MS-DIAL 5 (`CompMs.Common.Algorithm.Scoring.MsScanMatching`) into Python. The ported implementations are integrated into the `mzpy.ms` module.
 
